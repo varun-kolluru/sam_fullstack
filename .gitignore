@@ -1,0 +1,57 @@
+# =========================
+# BACKEND
+# =========================
+
+# SAM2 cloned repo (very large)
+backend/sam2/
+
+# Generated runtime data
+backend/storage/
+
+# Python virtual env
+backend/venv/
+backend/.venv/
+backend/env/
+
+# Python cache
+backend/__pycache__/
+backend/**/*.pyc
+
+# Logs
+backend/*.log
+
+
+# =========================
+# FRONTEND
+# =========================
+
+# Node modules
+frontend/node_modules/
+
+# Build output
+frontend/dist/
+frontend/build/
+
+# Vite cache
+frontend/.vite/
+
+
+# =========================
+# GLOBAL
+# =========================
+
+# Env files
+.env
+*.env
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Misc
+*.tmp
+*.swp

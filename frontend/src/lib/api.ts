@@ -1,4 +1,4 @@
-export const API_BASE = 'http://localhost:8000';
+export const API_BASE = "http://localhost:8000";
 
 export interface UploadResponse {
   video_id: string;
@@ -17,11 +17,11 @@ export interface PropagateResponse {
 
 export async function uploadVideo(
   file: File,
-  onUploadProgress: (percent: number) => void
+  onUploadProgress: (percent: number) => void,
 ): Promise<UploadResponse> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', `${API_BASE}/upload-video`);
+    xhr.open("POST", `${API_BASE}/upload-video`);
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) onUploadProgress((e.loaded / e.total) * 100);
     };
@@ -32,9 +32,9 @@ export async function uploadVideo(
         reject(new Error(`Upload failed with status ${xhr.status}`));
       }
     };
-    xhr.onerror = () => reject(new Error('Network error during upload'));
+    xhr.onerror = () => reject(new Error("Network error during upload"));
     const fd = new FormData();
-    fd.append('video', file);
+    fd.append("video", file);
     xhr.send(fd);
   });
 }
@@ -48,22 +48,22 @@ export async function segmentFrame(data: {
   polygon: number[][];
 }): Promise<SegmentResponse> {
   const res = await fetch(`${API_BASE}/segment-frame`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
   });
-  if (!res.ok) throw new Error('Segmentation failed');
+  if (!res.ok) throw new Error("Segmentation failed");
   return res.json();
 }
 
 export async function propagateVideoMask(
-  video_id: string
+  video_id: string,
 ): Promise<PropagateResponse> {
-  const res = await fetch(`${API_BASE}/propagate-video-mask`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+  const res = await fetch(`${API_BASE}/propagate-video`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ video_id }),
   });
-  if (!res.ok) throw new Error('Propagation failed');
+  if (!res.ok) throw new Error("Propagation failed");
   return res.json();
 }

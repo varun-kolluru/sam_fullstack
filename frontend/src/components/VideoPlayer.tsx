@@ -1,10 +1,18 @@
-import { useRef, useState, useEffect, useCallback } from 'react';
-import { Play, Pause } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Slider } from '@/components/ui/slider';
+import { useRef, useState, useEffect, useCallback } from "react";
+import { Play, Pause } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Slider } from "@/components/ui/slider";
 
-export interface Point { x: number; y: number; }
-export interface Box { x1: number; y1: number; x2: number; y2: number; }
+export interface Point {
+  x: number;
+  y: number;
+}
+export interface Box {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
 
 export interface Annotations {
   positivePoints: Point[];
@@ -13,9 +21,10 @@ export interface Annotations {
   polygons: Point[][];
 }
 
-type Tool = 'none' | 'positive' | 'negative' | 'box' | 'polygon';
+type Tool = "none" | "positive" | "negative" | "box" | "polygon";
 
 interface VideoPlayerProps {
+  videoId: string;
   videoUrl: string;
   activeTool: Tool;
   annotations: Annotations;
@@ -30,9 +39,18 @@ interface VideoPlayerProps {
 }
 
 const VideoPlayer = ({
-  videoUrl, activeTool, annotations, onAnnotationsChange,
-  maskUrl, masksFolder, fps, onFrameIdxChange,
-  isPaused, onPausedChange, clearSignal,
+  videoId,
+  videoUrl,
+  activeTool,
+  annotations,
+  onAnnotationsChange,
+  maskUrl,
+  masksFolder,
+  fps,
+  onFrameIdxChange,
+  isPaused,
+  onPausedChange,
+  clearSignal,
 }: VideoPlayerProps) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -40,39 +58,141 @@ const VideoPlayer = ({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [videoSize, setVideoSize] = useState({ w: 0, h: 0 });
-  const [drawingBox, setDrawingBox] = useState<{ start: Point; current: Point } | null>(null);
+  const [drawingBox, setDrawingBox] = useState<{
+    start: Point;
+    current: Point;
+  } | null>(null);
   const [currentPolygon, setCurrentPolygon] = useState<Point[]>([]);
   const [maskImage, setMaskImage] = useState<HTMLImageElement | null>(null);
-  const [frameMaskImage, setFrameMaskImage] = useState<HTMLImageElement | null>(null);
+  const [frameMaskImage, setFrameMaskImage] = useState<HTMLImageElement | null>(
+    null,
+  );
   const animRef = useRef<number>(0);
+  const maskCache = useRef<Map<number, HTMLImageElement>>(new Map());
 
   // Clear in-progress polygon when clearSignal changes
+  // useEffect(() => {
+  //   if (clearSignal) {
+  //     setCurrentPolygon([]);
+  //     setDrawingBox(null);
+  //   }
+  // }, [clearSignal]);
   useEffect(() => {
     if (clearSignal) {
+      // reset drawing states
       setCurrentPolygon([]);
       setDrawingBox(null);
+
+      // remove masks
+      setMaskImage(null);
+      setFrameMaskImage(null);
+
+      // clear annotations
+      onAnnotationsChange({
+        positivePoints: [],
+        negativePoints: [],
+        boxes: [],
+        polygons: [],
+      });
     }
   }, [clearSignal]);
 
+  useEffect(() => {
+    maskCache.current.clear();
+    setFrameMaskImage(null);
+  }, [videoId]);
+
+  useEffect(() => {
+    const frameIdx = Math.floor(currentTime * (fps || 30));
+
+    // ⭐ frontend cache hit
+    if (maskCache.current.has(frameIdx)) {
+      setFrameMaskImage(maskCache.current.get(frameIdx)!);
+      return;
+    }
+
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+
+    img.src = `http://localhost:8000/mask?video_id=${videoId}&frame_idx=${frameIdx}`;
+
+    img.onload = () => {
+      maskCache.current.set(frameIdx, img);
+      setFrameMaskImage(img);
+    };
+
+    img.onerror = () => {
+      // mask not ready yet
+    };
+  }, [currentTime, fps, videoId, maskUrl]);
+
   // Load mask image when maskUrl changes
   useEffect(() => {
-    if (!maskUrl) { setMaskImage(null); return; }
+    if (!maskUrl) {
+      setMaskImage(null);
+      return;
+    }
     const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.src = maskUrl;
+    img.crossOrigin = "anonymous";
+    // img.src = maskUrl;
+    img.src = `${maskUrl}?t=${Date.now()}`;
     img.onload = () => setMaskImage(img);
   }, [maskUrl]);
 
+  // 🔹 Reset propagated frame masks when a new segmentation mask arrives
+  // useEffect(() => {
+  //   if (maskUrl) {
+  //     setFrameMaskImage(null);
+  //   }
+  // }, [maskUrl]);
+
   // Load frame mask for tracking
-  useEffect(() => {
-    if (!masksFolder || !isPaused) { setFrameMaskImage(null); return; }
-    const frameIdx = Math.floor(currentTime * (fps || 30));
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.src = `${masksFolder}/${frameIdx}.jpg`;
-    img.onload = () => setFrameMaskImage(img);
-    img.onerror = () => setFrameMaskImage(null);
-  }, [masksFolder, currentTime, isPaused, fps]);
+  // useEffect(() => {
+  //   if (!masksFolder || !isPaused) { setFrameMaskImage(null); return; }
+  //   const frameIdx = Math.floor(currentTime * (fps || 30));
+  //   const img = new Image();
+  //   img.crossOrigin = 'anonymous';
+  //   img.src = `${masksFolder}/${frameIdx}.jpg`;
+  //   img.onload = () => setFrameMaskImage(img);
+  //   img.onerror = () => setFrameMaskImage(null);
+  // }, [masksFolder, currentTime, isPaused, fps]);
+
+  // useEffect(() => {
+  //   if (!masksFolder || !isPaused) {
+  //     setFrameMaskImage(null);
+  //     return;
+  //   }
+
+  //   const frameIdx = Math.floor(currentTime * (fps || 30));
+
+  //   // SAM2 saves masks like 00000.png
+  //   const frameName = frameIdx.toString().padStart(5, "0");
+
+  //   const img = new Image();
+  //   img.crossOrigin = "anonymous";
+  //   img.src = `${masksFolder}/${frameName}.png`;
+
+  //   img.onload = () => setFrameMaskImage(img);
+  //   img.onerror = () => setFrameMaskImage(null);
+  // }, [masksFolder, currentTime, isPaused, fps]);
+
+  // useEffect(() => {
+  //   if (!masksFolder) {
+  //     setFrameMaskImage(null);
+  //     return;
+  //   }
+
+  //   const frameIdx = Math.floor(currentTime * (fps || 30));
+  //   const frameName = frameIdx.toString().padStart(5, "0");
+
+  //   const img = new Image();
+  //   img.crossOrigin = "anonymous";
+  //   img.src = `${masksFolder}/${frameName}.png`;
+
+  //   img.onload = () => setFrameMaskImage(img);
+  //   img.onerror = () => {};
+  //   // img.onerror = () => setFrameMaskImage(null);
+  // }, [masksFolder, currentTime, fps]);
 
   const getDisplayRect = useCallback(() => {
     const video = videoRef.current;
@@ -88,19 +208,28 @@ const VideoPlayer = ({
     return { offsetX: (cw - dw) / 2, offsetY: (ch - dh) / 2, dw, dh, scale };
   }, []);
 
-  const canvasToVideo = useCallback((cx: number, cy: number): Point | null => {
-    const rect = getDisplayRect();
-    if (!rect) return null;
-    const vx = (cx - rect.offsetX) / rect.scale;
-    const vy = (cy - rect.offsetY) / rect.scale;
-    return { x: Math.round(vx), y: Math.round(vy) };
-  }, [getDisplayRect]);
+  const canvasToVideo = useCallback(
+    (cx: number, cy: number): Point | null => {
+      const rect = getDisplayRect();
+      if (!rect) return null;
+      const vx = (cx - rect.offsetX) / rect.scale;
+      const vy = (cy - rect.offsetY) / rect.scale;
+      return { x: Math.round(vx), y: Math.round(vy) };
+    },
+    [getDisplayRect],
+  );
 
-  const videoToCanvas = useCallback((vx: number, vy: number): Point | null => {
-    const rect = getDisplayRect();
-    if (!rect) return null;
-    return { x: vx * rect.scale + rect.offsetX, y: vy * rect.scale + rect.offsetY };
-  }, [getDisplayRect]);
+  const videoToCanvas = useCallback(
+    (vx: number, vy: number): Point | null => {
+      const rect = getDisplayRect();
+      if (!rect) return null;
+      return {
+        x: vx * rect.scale + rect.offsetX,
+        y: vy * rect.scale + rect.offsetY,
+      };
+    },
+    [getDisplayRect],
+  );
 
   // Draw annotations on canvas
   const drawCanvas = useCallback(() => {
@@ -109,7 +238,7 @@ const VideoPlayer = ({
     if (!canvas || !container) return;
     canvas.width = container.clientWidth;
     canvas.height = container.clientHeight;
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext("2d");
     if (!ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     const rect = getDisplayRect();
@@ -117,6 +246,8 @@ const VideoPlayer = ({
 
     // Draw mask overlay
     const activeImg = frameMaskImage || maskImage;
+    // const activeImg = frameMaskImage;
+    // const activeImg = maskImage || frameMaskImage;
     if (activeImg) {
       ctx.globalAlpha = 0.35;
       ctx.drawImage(activeImg, rect.offsetX, rect.offsetY, rect.dw, rect.dh);
@@ -124,14 +255,14 @@ const VideoPlayer = ({
     }
 
     // Draw positive points
-    annotations.positivePoints.forEach(p => {
+    annotations.positivePoints.forEach((p) => {
       const cp = videoToCanvas(p.x, p.y);
       if (!cp) return;
       ctx.beginPath();
       ctx.arc(cp.x, cp.y, 6, 0, Math.PI * 2);
-      ctx.fillStyle = 'hsl(142 70% 42%)';
+      ctx.fillStyle = "hsl(142 70% 42%)";
       ctx.fill();
-      ctx.strokeStyle = 'hsl(142 70% 55%)';
+      ctx.strokeStyle = "hsl(142 70% 55%)";
       ctx.lineWidth = 2;
       ctx.stroke();
       // Plus sign
@@ -140,37 +271,37 @@ const VideoPlayer = ({
       ctx.lineTo(cp.x + 3, cp.y);
       ctx.moveTo(cp.x, cp.y - 3);
       ctx.lineTo(cp.x, cp.y + 3);
-      ctx.strokeStyle = '#fff';
+      ctx.strokeStyle = "#fff";
       ctx.lineWidth = 1.5;
       ctx.stroke();
     });
 
     // Draw negative points
-    annotations.negativePoints.forEach(p => {
+    annotations.negativePoints.forEach((p) => {
       const cp = videoToCanvas(p.x, p.y);
       if (!cp) return;
       ctx.beginPath();
       ctx.arc(cp.x, cp.y, 6, 0, Math.PI * 2);
-      ctx.fillStyle = 'hsl(0 70% 50%)';
+      ctx.fillStyle = "hsl(0 70% 50%)";
       ctx.fill();
-      ctx.strokeStyle = 'hsl(0 70% 65%)';
+      ctx.strokeStyle = "hsl(0 70% 65%)";
       ctx.lineWidth = 2;
       ctx.stroke();
       // Minus sign
       ctx.beginPath();
       ctx.moveTo(cp.x - 3, cp.y);
       ctx.lineTo(cp.x + 3, cp.y);
-      ctx.strokeStyle = '#fff';
+      ctx.strokeStyle = "#fff";
       ctx.lineWidth = 1.5;
       ctx.stroke();
     });
 
     // Draw boxes
-    annotations.boxes.forEach(box => {
+    annotations.boxes.forEach((box) => {
       const tl = videoToCanvas(box.x1, box.y1);
       const br = videoToCanvas(box.x2, box.y2);
       if (!tl || !br) return;
-      ctx.strokeStyle = 'hsl(142 70% 50%)';
+      ctx.strokeStyle = "hsl(142 70% 50%)";
       ctx.lineWidth = 2;
       ctx.setLineDash([6, 3]);
       ctx.strokeRect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
@@ -178,7 +309,7 @@ const VideoPlayer = ({
     });
 
     // Draw polygons
-    annotations.polygons.forEach(poly => {
+    annotations.polygons.forEach((poly) => {
       if (poly.length < 2) return;
       ctx.beginPath();
       const first = videoToCanvas(poly[0].x, poly[0].y);
@@ -189,10 +320,10 @@ const VideoPlayer = ({
         if (p) ctx.lineTo(p.x, p.y);
       }
       ctx.closePath();
-      ctx.strokeStyle = 'hsl(142 70% 50%)';
+      ctx.strokeStyle = "hsl(142 70% 50%)";
       ctx.lineWidth = 2;
       ctx.stroke();
-      ctx.fillStyle = 'hsla(142, 70%, 50%, 0.1)';
+      ctx.fillStyle = "hsla(142, 70%, 50%, 0.1)";
       ctx.fill();
     });
 
@@ -201,7 +332,7 @@ const VideoPlayer = ({
       const s = videoToCanvas(drawingBox.start.x, drawingBox.start.y);
       const c = videoToCanvas(drawingBox.current.x, drawingBox.current.y);
       if (s && c) {
-        ctx.strokeStyle = 'hsl(185 70% 50%)';
+        ctx.strokeStyle = "hsl(185 70% 50%)";
         ctx.lineWidth = 2;
         ctx.setLineDash([4, 4]);
         ctx.strokeRect(s.x, s.y, c.x - s.x, c.y - s.y);
@@ -219,23 +350,31 @@ const VideoPlayer = ({
           const p = videoToCanvas(currentPolygon[i].x, currentPolygon[i].y);
           if (p) ctx.lineTo(p.x, p.y);
         }
-        ctx.strokeStyle = 'hsl(142 70% 50%)';
+        ctx.strokeStyle = "hsl(142 70% 50%)";
         ctx.lineWidth = 2;
         ctx.setLineDash([4, 4]);
         ctx.stroke();
         ctx.setLineDash([]);
         // Draw vertices
-        currentPolygon.forEach(pt => {
+        currentPolygon.forEach((pt) => {
           const p = videoToCanvas(pt.x, pt.y);
           if (!p) return;
           ctx.beginPath();
           ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
-          ctx.fillStyle = 'hsl(142 70% 50%)';
+          ctx.fillStyle = "hsl(142 70% 50%)";
           ctx.fill();
         });
       }
     }
-  }, [annotations, drawingBox, currentPolygon, maskImage, frameMaskImage, videoToCanvas, getDisplayRect]);
+  }, [
+    annotations,
+    drawingBox,
+    currentPolygon,
+    maskImage,
+    frameMaskImage,
+    videoToCanvas,
+    getDisplayRect,
+  ]);
 
   // Redraw on changes
   useEffect(() => {
@@ -296,29 +435,29 @@ const VideoPlayer = ({
   };
 
   const handleCanvasClick = (e: React.MouseEvent) => {
-    if (!isPaused || activeTool === 'none') return;
+    if (!isPaused || activeTool === "none") return;
     const coords = getCanvasCoords(e);
     if (!coords) return;
     const vp = canvasToVideo(coords.cx, coords.cy);
     if (!vp) return;
 
-    if (activeTool === 'positive') {
+    if (activeTool === "positive") {
       onAnnotationsChange({
         ...annotations,
         positivePoints: [...annotations.positivePoints, vp],
       });
-    } else if (activeTool === 'negative') {
+    } else if (activeTool === "negative") {
       onAnnotationsChange({
         ...annotations,
         negativePoints: [...annotations.negativePoints, vp],
       });
-    } else if (activeTool === 'polygon') {
-      setCurrentPolygon(prev => [...prev, vp]);
+    } else if (activeTool === "polygon") {
+      setCurrentPolygon((prev) => [...prev, vp]);
     }
   };
 
   const handleCanvasDoubleClick = () => {
-    if (activeTool === 'polygon' && currentPolygon.length >= 3) {
+    if (activeTool === "polygon" && currentPolygon.length >= 3) {
       onAnnotationsChange({
         ...annotations,
         polygons: [...annotations.polygons, currentPolygon],
@@ -328,7 +467,7 @@ const VideoPlayer = ({
   };
 
   const handleMouseDown = (e: React.MouseEvent) => {
-    if (!isPaused || activeTool !== 'box') return;
+    if (!isPaused || activeTool !== "box") return;
     const coords = getCanvasCoords(e);
     if (!coords) return;
     const vp = canvasToVideo(coords.cx, coords.cy);
@@ -342,7 +481,7 @@ const VideoPlayer = ({
     if (!coords) return;
     const vp = canvasToVideo(coords.cx, coords.cy);
     if (!vp) return;
-    setDrawingBox(prev => prev ? { ...prev, current: vp } : null);
+    setDrawingBox((prev) => (prev ? { ...prev, current: vp } : null));
   };
 
   const handleMouseUp = () => {
@@ -364,10 +503,11 @@ const VideoPlayer = ({
   const formatTime = (t: number) => {
     const mins = Math.floor(t / 60);
     const secs = Math.floor(t % 60);
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
+    return `${mins}:${secs.toString().padStart(2, "0")}`;
   };
 
-  const cursorClass = isPaused && activeTool !== 'none' ? 'cursor-crosshair' : 'cursor-default';
+  const cursorClass =
+    isPaused && activeTool !== "none" ? "cursor-crosshair" : "cursor-default";
 
   return (
     <div className="flex flex-col gap-3">
@@ -404,8 +544,17 @@ const VideoPlayer = ({
 
       {/* Controls */}
       <div className="flex items-center gap-3 px-2">
-        <Button variant="tool" size="icon" onClick={togglePlay} className="shrink-0">
-          {isPaused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
+        <Button
+          variant="tool"
+          size="icon"
+          onClick={togglePlay}
+          className="shrink-0"
+        >
+          {isPaused ? (
+            <Play className="h-4 w-4" />
+          ) : (
+            <Pause className="h-4 w-4" />
+          )}
         </Button>
         <Slider
           value={[currentTime]}
@@ -420,8 +569,18 @@ const VideoPlayer = ({
       </div>
       {videoSize.w > 0 && (
         <div className="flex items-center gap-4 px-2 text-xs text-muted-foreground">
-          <span>Frame: <span className="text-primary font-mono">{Math.floor(currentTime * (fps || 30))}</span></span>
-          <span>Resolution: <span className="font-mono">{videoSize.w}×{videoSize.h}</span></span>
+          <span>
+            Frame:{" "}
+            <span className="text-primary font-mono">
+              {Math.floor(currentTime * (fps || 30))}
+            </span>
+          </span>
+          <span>
+            Resolution:{" "}
+            <span className="font-mono">
+              {videoSize.w}×{videoSize.h}
+            </span>
+          </span>
         </div>
       )}
     </div>
