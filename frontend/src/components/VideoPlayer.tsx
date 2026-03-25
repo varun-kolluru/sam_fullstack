@@ -2,6 +2,7 @@ import { useRef, useState, useEffect, useCallback } from "react";
 import { Play, Pause } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
+import { API_BASE } from "@/lib/api";
 
 export interface Point {
   x: number;
@@ -114,7 +115,8 @@ const VideoPlayer = ({
     const img = new Image();
     img.crossOrigin = "anonymous";
 
-    img.src = `http://localhost:8000/mask?video_id=${videoId}&frame_idx=${frameIdx}`;
+    //img.src = `http://localhost:8000/mask?video_id=${videoId}&frame_idx=${frameIdx}`;
+    img.src = `${API_BASE}/mask?video_id=${videoId}&frame_idx=${frameIdx}`;
 
     img.onload = () => {
       maskCache.current.set(frameIdx, img);

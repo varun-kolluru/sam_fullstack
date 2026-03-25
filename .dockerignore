@@ -1,0 +1,29 @@
+# Git
+.git
+.gitignore
+
+# Node modules (frontend installs fresh in Docker)
+frontend/node_modules
+frontend/dist
+frontend/build
+frontend/.vite
+
+# Backend runtime data
+backend/storage
+backend/venv
+backend/.venv
+backend/env
+backend/__pycache__
+backend/sam2
+
+# IDE and OS junk
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+
+# Docs
+*.md
+!frontend/README.md
