@@ -21,18 +21,18 @@ interface VideoPlayerProps {
   annotations: Annotations;
   onAnnotationsChange: (a: Annotations) => void;
   maskUrl: string | null;
-  masksFolder: string | null;
   fps: number;
   onFrameIdxChange: (idx: number) => void;
   isPaused: boolean;
   onPausedChange: (paused: boolean) => void;
   clearSignal?: number;
+  onVideoSizeChange?: (size: { w: number; h: number }) => void;
 }
 
 const VideoPlayer = ({
   videoUrl, activeTool, annotations, onAnnotationsChange,
-  maskUrl, masksFolder, fps, onFrameIdxChange,
-  isPaused, onPausedChange, clearSignal,
+  maskUrl, fps, onFrameIdxChange,
+  isPaused, onPausedChange, clearSignal, onVideoSizeChange,
 }: VideoPlayerProps) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -43,8 +43,6 @@ const VideoPlayer = ({
   const [drawingBox, setDrawingBox] = useState<{ start: Point; current: Point } | null>(null);
   const [currentPolygon, setCurrentPolygon] = useState<Point[]>([]);
   const [maskImage, setMaskImage] = useState<HTMLImageElement | null>(null);
-  const [frameMaskImage, setFrameMaskImage] = useState<HTMLImageElement | null>(null);
-  const animRef = useRef<number>(0);
 
   // Clear in-progress polygon when clearSignal changes
   useEffect(() => {
@@ -54,7 +52,7 @@ const VideoPlayer = ({
     }
   }, [clearSignal]);
 
-  // Load mask image when maskUrl changes
+  // Load single-frame mask overlay (used after segmentation, shown while paused)
   useEffect(() => {
     if (!maskUrl) { setMaskImage(null); return; }
     const img = new Image();
@@ -62,17 +60,6 @@ const VideoPlayer = ({
     img.src = maskUrl;
     img.onload = () => setMaskImage(img);
   }, [maskUrl]);
-
-  // Load frame mask for tracking
-  useEffect(() => {
-    if (!masksFolder || !isPaused) { setFrameMaskImage(null); return; }
-    const frameIdx = Math.floor(currentTime * (fps || 30));
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.src = `${masksFolder}/${frameIdx}.jpg`;
-    img.onload = () => setFrameMaskImage(img);
-    img.onerror = () => setFrameMaskImage(null);
-  }, [masksFolder, currentTime, isPaused, fps]);
 
   const getDisplayRect = useCallback(() => {
     const video = videoRef.current;
@@ -91,9 +78,10 @@ const VideoPlayer = ({
   const canvasToVideo = useCallback((cx: number, cy: number): Point | null => {
     const rect = getDisplayRect();
     if (!rect) return null;
-    const vx = (cx - rect.offsetX) / rect.scale;
-    const vy = (cy - rect.offsetY) / rect.scale;
-    return { x: Math.round(vx), y: Math.round(vy) };
+    return {
+      x: Math.round((cx - rect.offsetX) / rect.scale),
+      y: Math.round((cy - rect.offsetY) / rect.scale),
+    };
   }, [getDisplayRect]);
 
   const videoToCanvas = useCallback((vx: number, vy: number): Point | null => {
@@ -102,7 +90,6 @@ const VideoPlayer = ({
     return { x: vx * rect.scale + rect.offsetX, y: vy * rect.scale + rect.offsetY };
   }, [getDisplayRect]);
 
-  // Draw annotations on canvas
   const drawCanvas = useCallback(() => {
     const canvas = canvasRef.current;
     const container = containerRef.current;
@@ -115,15 +102,14 @@ const VideoPlayer = ({
     const rect = getDisplayRect();
     if (!rect) return;
 
-    // Draw mask overlay
-    const activeImg = frameMaskImage || maskImage;
-    if (activeImg) {
+    // Single-frame mask overlay (only meaningful while paused on the segmented frame)
+    if (maskImage && isPaused) {
       ctx.globalAlpha = 0.35;
-      ctx.drawImage(activeImg, rect.offsetX, rect.offsetY, rect.dw, rect.dh);
+      ctx.drawImage(maskImage, rect.offsetX, rect.offsetY, rect.dw, rect.dh);
       ctx.globalAlpha = 1;
     }
 
-    // Draw positive points
+    // Positive points
     annotations.positivePoints.forEach(p => {
       const cp = videoToCanvas(p.x, p.y);
       if (!cp) return;
@@ -134,18 +120,15 @@ const VideoPlayer = ({
       ctx.strokeStyle = 'hsl(142 70% 55%)';
       ctx.lineWidth = 2;
       ctx.stroke();
-      // Plus sign
       ctx.beginPath();
-      ctx.moveTo(cp.x - 3, cp.y);
-      ctx.lineTo(cp.x + 3, cp.y);
-      ctx.moveTo(cp.x, cp.y - 3);
-      ctx.lineTo(cp.x, cp.y + 3);
+      ctx.moveTo(cp.x - 3, cp.y); ctx.lineTo(cp.x + 3, cp.y);
+      ctx.moveTo(cp.x, cp.y - 3); ctx.lineTo(cp.x, cp.y + 3);
       ctx.strokeStyle = '#fff';
       ctx.lineWidth = 1.5;
       ctx.stroke();
     });
 
-    // Draw negative points
+    // Negative points
     annotations.negativePoints.forEach(p => {
       const cp = videoToCanvas(p.x, p.y);
       if (!cp) return;
@@ -156,16 +139,14 @@ const VideoPlayer = ({
       ctx.strokeStyle = 'hsl(0 70% 65%)';
       ctx.lineWidth = 2;
       ctx.stroke();
-      // Minus sign
       ctx.beginPath();
-      ctx.moveTo(cp.x - 3, cp.y);
-      ctx.lineTo(cp.x + 3, cp.y);
+      ctx.moveTo(cp.x - 3, cp.y); ctx.lineTo(cp.x + 3, cp.y);
       ctx.strokeStyle = '#fff';
       ctx.lineWidth = 1.5;
       ctx.stroke();
     });
 
-    // Draw boxes
+    // Boxes
     annotations.boxes.forEach(box => {
       const tl = videoToCanvas(box.x1, box.y1);
       const br = videoToCanvas(box.x2, box.y2);
@@ -177,7 +158,7 @@ const VideoPlayer = ({
       ctx.setLineDash([]);
     });
 
-    // Draw polygons
+    // Completed polygons
     annotations.polygons.forEach(poly => {
       if (poly.length < 2) return;
       ctx.beginPath();
@@ -196,7 +177,7 @@ const VideoPlayer = ({
       ctx.fill();
     });
 
-    // Draw in-progress box
+    // In-progress box
     if (drawingBox) {
       const s = videoToCanvas(drawingBox.start.x, drawingBox.start.y);
       const c = videoToCanvas(drawingBox.current.x, drawingBox.current.y);
@@ -209,7 +190,7 @@ const VideoPlayer = ({
       }
     }
 
-    // Draw in-progress polygon
+    // In-progress polygon
     if (currentPolygon.length > 0) {
       ctx.beginPath();
       const first = videoToCanvas(currentPolygon[0].x, currentPolygon[0].y);
@@ -224,7 +205,6 @@ const VideoPlayer = ({
         ctx.setLineDash([4, 4]);
         ctx.stroke();
         ctx.setLineDash([]);
-        // Draw vertices
         currentPolygon.forEach(pt => {
           const p = videoToCanvas(pt.x, pt.y);
           if (!p) return;
@@ -235,28 +215,20 @@ const VideoPlayer = ({
         });
       }
     }
-  }, [annotations, drawingBox, currentPolygon, maskImage, frameMaskImage, videoToCanvas, getDisplayRect]);
+  }, [annotations, drawingBox, currentPolygon, maskImage, isPaused, videoToCanvas, getDisplayRect]);
 
-  // Redraw on changes
-  useEffect(() => {
-    drawCanvas();
-  }, [drawCanvas]);
+  useEffect(() => { drawCanvas(); }, [drawCanvas]);
 
-  // Animation loop for syncing during playback
+  // Frame index sync during playback
   useEffect(() => {
     if (isPaused) return;
-    const tick = () => {
-      const video = videoRef.current;
-      if (video) {
-        setCurrentTime(video.currentTime);
-        onFrameIdxChange(Math.floor(video.currentTime * (fps || 30)));
-      }
-      drawCanvas();
-      animRef.current = requestAnimationFrame(tick);
-    };
-    animRef.current = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(animRef.current);
-  }, [isPaused, drawCanvas, fps, onFrameIdxChange]);
+    const video = videoRef.current;
+    if (!video) return;
+    const interval = setInterval(() => {
+      onFrameIdxChange(Math.floor(video.currentTime * (fps || 30)));
+    }, 100);
+    return () => clearInterval(interval);
+  }, [isPaused, fps, onFrameIdxChange]);
 
   // Resize observer
   useEffect(() => {
@@ -270,13 +242,8 @@ const VideoPlayer = ({
   const togglePlay = () => {
     const video = videoRef.current;
     if (!video) return;
-    if (video.paused) {
-      video.play();
-      onPausedChange(false);
-    } else {
-      video.pause();
-      onPausedChange(true);
-    }
+    if (video.paused) { video.play(); onPausedChange(false); }
+    else { video.pause(); onPausedChange(true); }
   };
 
   const handleSeek = (value: number[]) => {
@@ -301,17 +268,10 @@ const VideoPlayer = ({
     if (!coords) return;
     const vp = canvasToVideo(coords.cx, coords.cy);
     if (!vp) return;
-
     if (activeTool === 'positive') {
-      onAnnotationsChange({
-        ...annotations,
-        positivePoints: [...annotations.positivePoints, vp],
-      });
+      onAnnotationsChange({ ...annotations, positivePoints: [...annotations.positivePoints, vp] });
     } else if (activeTool === 'negative') {
-      onAnnotationsChange({
-        ...annotations,
-        negativePoints: [...annotations.negativePoints, vp],
-      });
+      onAnnotationsChange({ ...annotations, negativePoints: [...annotations.negativePoints, vp] });
     } else if (activeTool === 'polygon') {
       setCurrentPolygon(prev => [...prev, vp]);
     }
@@ -319,10 +279,7 @@ const VideoPlayer = ({
 
   const handleCanvasDoubleClick = () => {
     if (activeTool === 'polygon' && currentPolygon.length >= 3) {
-      onAnnotationsChange({
-        ...annotations,
-        polygons: [...annotations.polygons, currentPolygon],
-      });
+      onAnnotationsChange({ ...annotations, polygons: [...annotations.polygons, currentPolygon] });
       setCurrentPolygon([]);
     }
   };
@@ -353,10 +310,7 @@ const VideoPlayer = ({
     const x2 = Math.max(start.x, current.x);
     const y2 = Math.max(start.y, current.y);
     if (Math.abs(x2 - x1) > 5 && Math.abs(y2 - y1) > 5) {
-      onAnnotationsChange({
-        ...annotations,
-        boxes: [...annotations.boxes, { x1, y1, x2, y2 }],
-      });
+      onAnnotationsChange({ ...annotations, boxes: [...annotations.boxes, { x1, y1, x2, y2 }] });
     }
     setDrawingBox(null);
   };
@@ -382,11 +336,17 @@ const VideoPlayer = ({
           onLoadedMetadata={(e) => {
             const v = e.currentTarget;
             setDuration(v.duration);
-            setVideoSize({ w: v.videoWidth, h: v.videoHeight });
+            const size = { w: v.videoWidth, h: v.videoHeight };
+            setVideoSize(size);
+            onVideoSizeChange?.(size);
             v.pause();
             onPausedChange(true);
           }}
-          onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+          onTimeUpdate={(e) => {
+            const t = e.currentTarget.currentTime;
+            setCurrentTime(t);
+            onFrameIdxChange(Math.floor(t * (fps || 30)));
+          }}
           onPause={() => onPausedChange(true)}
           onPlay={() => onPausedChange(false)}
           onEnded={() => onPausedChange(true)}
@@ -402,7 +362,6 @@ const VideoPlayer = ({
         />
       </div>
 
-      {/* Controls */}
       <div className="flex items-center gap-3 px-2">
         <Button variant="tool" size="icon" onClick={togglePlay} className="shrink-0">
           {isPaused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
@@ -418,6 +377,7 @@ const VideoPlayer = ({
           {formatTime(currentTime)} / {formatTime(duration)}
         </span>
       </div>
+
       {videoSize.w > 0 && (
         <div className="flex items-center gap-4 px-2 text-xs text-muted-foreground">
           <span>Frame: <span className="text-primary font-mono">{Math.floor(currentTime * (fps || 30))}</span></span>
