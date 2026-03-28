@@ -11,7 +11,7 @@ class SAM2Service:
         cfg: str = "configs/sam2.1/sam2.1_hiera_t.yaml",
         ckpt: str = "checkpoints/sam2.1_hiera_tiny.pt",
     ):
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = "cuda" if torch.cuda.is_available() else "mps"
         self.cfg = cfg
         self.ckpt = ckpt
 
