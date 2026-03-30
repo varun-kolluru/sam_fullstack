@@ -1,0 +1,11 @@
+.git
+.DS_Store
+node_modules
+__pycache__
+*.pyc
+*.pyo
+.env
+.venv
+*.egg-info
+dist
+build

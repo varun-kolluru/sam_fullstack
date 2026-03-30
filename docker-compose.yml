@@ -1,0 +1,42 @@
+# =============================================================================
+# Docker Compose — SAM Fullstack (MedSeg Vision)
+# Usage:  docker compose up --build -d
+# =============================================================================
+
+services:
+  # ---------- Backend: FastAPI + SAM2 (GPU) ----------
+  backend:
+    build:
+      context: ./backend/sam2
+      dockerfile: Dockerfile
+    container_name: sam2-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - storage_data:/opt/sam2/storage
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  # ---------- Frontend: React + Nginx ----------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: sam2-frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  storage_data:
+    driver: local
