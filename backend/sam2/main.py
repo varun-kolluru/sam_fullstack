@@ -453,8 +453,24 @@ def render_masked_video(req: RenderMaskedVideoRequest):
     h, w = first_frame.shape[:2]
 
     out_path = os.path.join(VIDEO_DIR, f"{video_name}_masked.mp4")
-    fourcc = cv2.VideoWriter_fourcc(*"avc1")
-    writer = cv2.VideoWriter(out_path, fourcc, fps, (w, h))
+
+    # Try codecs in order of preference; avc1/h264 may not be available in
+    # all Docker / headless environments (e.g. h264_v4l2m2m requires a V4L2
+    # device).  mp4v (MPEG-4 Part 2) is universally available.
+    writer = None
+    for codec in ("mp4v", "avc1", "XVID"):
+        fourcc = cv2.VideoWriter_fourcc(*codec)
+        writer = cv2.VideoWriter(out_path, fourcc, fps, (w, h))
+        if writer.isOpened():
+            break
+        writer.release()
+        writer = None
+
+    if writer is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Could not initialise video encoder. No suitable codec found.",
+        )
 
     mask_color = np.array([29, 158, 117], dtype=np.uint8)  # BGR teal
 
