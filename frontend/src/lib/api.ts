@@ -1,4 +1,7 @@
-export const API_BASE = 'http://localhost:8000';
+// In production (Docker/Nginx), use '/api' which gets proxied to backend:8000
+// For local development, create a .env file with VITE_API_BASE=http://localhost:8000
+const envBase = (import.meta as any).env?.VITE_API_BASE;
+export const API_BASE: string = envBase || '/api';
 
 export interface UploadResponse {
   video_name: string;
