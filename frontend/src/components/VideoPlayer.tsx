@@ -21,25 +21,39 @@ interface VideoPlayerProps {
   annotations: Annotations;
   onAnnotationsChange: (a: Annotations) => void;
   maskUrl: string | null;
+  /** Hex colour for the mask overlay of the current object, e.g. '#1d9e75' */
+  maskColor?: string;
   fps: number;
   onFrameIdxChange: (idx: number) => void;
   isPaused: boolean;
   onPausedChange: (paused: boolean) => void;
   clearSignal?: number;
   onVideoSizeChange?: (size: { w: number; h: number }) => void;
-  /** Called with the raw video.currentTime whenever it changes */
   onCurrentTimeChange?: (t: number) => void;
-  /** Ref whose .current is a callback (seekFn) => void, called after onLoadedMetadata to seek to a time */
   seekToRef?: MutableRefObject<((seekFn: (t: number) => void) => void) | null>;
-  /** When true, annotation overlays (points, boxes, polygons) are not rendered */
   hidePrompts?: boolean;
+  /** Hex colour used for annotation overlays (points, boxes, polygons) */
+  activeObjectColor?: string;
 }
+
+/** Parse a hex colour (#rrggbb) into an rgba() CSS string with given alpha. */
+function hexToRgba(hex: string, alpha: number): string {
+  const clean = hex.replace('#', '');
+  const r = parseInt(clean.substring(0, 2), 16);
+  const g = parseInt(clean.substring(2, 4), 16);
+  const b = parseInt(clean.substring(4, 6), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+const DEFAULT_COLOR = '#1d9e75';
 
 const VideoPlayer = ({
   videoUrl, activeTool, annotations, onAnnotationsChange,
-  maskUrl, fps, onFrameIdxChange, onCurrentTimeChange,
+  maskUrl, maskColor = DEFAULT_COLOR,
+  fps, onFrameIdxChange, onCurrentTimeChange,
   isPaused, onPausedChange, clearSignal, onVideoSizeChange,
   seekToRef, hidePrompts = false,
+  activeObjectColor = DEFAULT_COLOR,
 }: VideoPlayerProps) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -51,26 +65,18 @@ const VideoPlayer = ({
   const [currentPolygon, setCurrentPolygon] = useState<Point[]>([]);
   const [maskImage, setMaskImage] = useState<HTMLImageElement | null>(null);
 
-  // Clear in-progress polygon when clearSignal changes
   useEffect(() => {
-    if (clearSignal) {
-      setCurrentPolygon([]);
-      setDrawingBox(null);
-    }
+    if (clearSignal) { setCurrentPolygon([]); setDrawingBox(null); }
   }, [clearSignal]);
 
-  // Handle __undoPolygonPoint signal from AnnotationToolbar
   useEffect(() => {
     if ((annotations as any).__undoPolygonPoint) {
-      // Pop the last in-progress polygon point
       setCurrentPolygon(prev => prev.length > 0 ? prev.slice(0, -1) : prev);
-      // Clean the flag so it doesn't re-trigger
       const { __undoPolygonPoint, ...clean } = annotations as any;
       onAnnotationsChange(clean as Annotations);
     }
   }, [annotations, onAnnotationsChange]);
 
-  // Load single-frame mask overlay (used after segmentation, shown while paused)
   useEffect(() => {
     if (!maskUrl) { setMaskImage(null); return; }
     const img = new Image();
@@ -120,25 +126,27 @@ const VideoPlayer = ({
     const rect = getDisplayRect();
     if (!rect) return;
 
-    // Single-frame mask overlay (only meaningful while paused on the segmented frame)
+    // Mask overlay (paused frame only)
     if (maskImage && isPaused) {
       ctx.globalAlpha = 0.35;
       ctx.drawImage(maskImage, rect.offsetX, rect.offsetY, rect.dw, rect.dh);
       ctx.globalAlpha = 1;
     }
 
-    // Skip annotation overlays when hidePrompts is true
     if (hidePrompts) return;
 
-    // Positive points
+    const solidColor = activeObjectColor;
+    const lightColor = hexToRgba(activeObjectColor, 0.25);
+
+    // Positive points — object colour
     annotations.positivePoints.forEach(p => {
       const cp = videoToCanvas(p.x, p.y);
       if (!cp) return;
       ctx.beginPath();
       ctx.arc(cp.x, cp.y, 6, 0, Math.PI * 2);
-      ctx.fillStyle = 'hsl(142 70% 42%)';
+      ctx.fillStyle = solidColor;
       ctx.fill();
-      ctx.strokeStyle = 'hsl(142 70% 55%)';
+      ctx.strokeStyle = hexToRgba(activeObjectColor, 0.7);
       ctx.lineWidth = 2;
       ctx.stroke();
       ctx.beginPath();
@@ -149,7 +157,7 @@ const VideoPlayer = ({
       ctx.stroke();
     });
 
-    // Negative points
+    // Negative points — always red
     annotations.negativePoints.forEach(p => {
       const cp = videoToCanvas(p.x, p.y);
       if (!cp) return;
@@ -172,7 +180,7 @@ const VideoPlayer = ({
       const tl = videoToCanvas(box.x1, box.y1);
       const br = videoToCanvas(box.x2, box.y2);
       if (!tl || !br) return;
-      ctx.strokeStyle = 'hsl(142 70% 50%)';
+      ctx.strokeStyle = solidColor;
       ctx.lineWidth = 2;
       ctx.setLineDash([6, 3]);
       ctx.strokeRect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
@@ -191,10 +199,10 @@ const VideoPlayer = ({
         if (p) ctx.lineTo(p.x, p.y);
       }
       ctx.closePath();
-      ctx.strokeStyle = 'hsl(142 70% 50%)';
+      ctx.strokeStyle = solidColor;
       ctx.lineWidth = 2;
       ctx.stroke();
-      ctx.fillStyle = 'hsla(142, 70%, 50%, 0.1)';
+      ctx.fillStyle = lightColor;
       ctx.fill();
     });
 
@@ -203,7 +211,7 @@ const VideoPlayer = ({
       const s = videoToCanvas(drawingBox.start.x, drawingBox.start.y);
       const c = videoToCanvas(drawingBox.current.x, drawingBox.current.y);
       if (s && c) {
-        ctx.strokeStyle = 'hsl(185 70% 50%)';
+        ctx.strokeStyle = hexToRgba(activeObjectColor, 0.8);
         ctx.lineWidth = 2;
         ctx.setLineDash([4, 4]);
         ctx.strokeRect(s.x, s.y, c.x - s.x, c.y - s.y);
@@ -221,7 +229,7 @@ const VideoPlayer = ({
           const p = videoToCanvas(currentPolygon[i].x, currentPolygon[i].y);
           if (p) ctx.lineTo(p.x, p.y);
         }
-        ctx.strokeStyle = 'hsl(142 70% 50%)';
+        ctx.strokeStyle = solidColor;
         ctx.lineWidth = 2;
         ctx.setLineDash([4, 4]);
         ctx.stroke();
@@ -231,16 +239,15 @@ const VideoPlayer = ({
           if (!p) return;
           ctx.beginPath();
           ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
-          ctx.fillStyle = 'hsl(142 70% 50%)';
+          ctx.fillStyle = solidColor;
           ctx.fill();
         });
       }
     }
-  }, [annotations, drawingBox, currentPolygon, maskImage, isPaused, videoToCanvas, getDisplayRect, hidePrompts]);
+  }, [annotations, drawingBox, currentPolygon, maskImage, isPaused, videoToCanvas, getDisplayRect, hidePrompts, activeObjectColor]);
 
   useEffect(() => { drawCanvas(); }, [drawCanvas]);
 
-  // Frame index sync during playback
   useEffect(() => {
     if (isPaused) return;
     const video = videoRef.current;
@@ -251,7 +258,6 @@ const VideoPlayer = ({
     return () => clearInterval(interval);
   }, [isPaused, fps, onFrameIdxChange]);
 
-  // Resize observer
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -263,12 +269,9 @@ const VideoPlayer = ({
   const seekVideo = useCallback((time: number) => {
     const video = videoRef.current;
     if (!video) return;
-    // The browser snaps to the nearest decodable frame, so don't update state
-    // here — the `seeked` event handler below reads back the actual landed time.
     video.currentTime = time;
   }, []);
 
-  // After seek completes, sync state from actual landed currentTime
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -290,9 +293,7 @@ const VideoPlayer = ({
     else { video.pause(); onPausedChange(true); }
   };
 
-  const handleSeek = (value: number[]) => {
-    seekVideo(value[0]);
-  };
+  const handleSeek = (value: number[]) => seekVideo(value[0]);
 
   const getCanvasCoords = (e: React.MouseEvent) => {
     const canvas = canvasRef.current;
@@ -380,8 +381,6 @@ const VideoPlayer = ({
             onVideoSizeChange?.(size);
             v.pause();
             onPausedChange(true);
-
-            // If a seekTo callback was queued (e.g. after masked/original video swap), run it now
             if (seekToRef?.current) {
               const cb = seekToRef.current;
               seekToRef.current = null;

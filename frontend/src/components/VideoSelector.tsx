@@ -32,7 +32,7 @@ const VideoSelector = ({
     setError(false);
     try {
       const list = await listVideos();
-      setVideos(list);
+      setVideos(list.videos);
     } catch {
       setError(true);
     } finally {
