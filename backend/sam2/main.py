@@ -167,9 +167,9 @@ def list_videos():
     names = [
         f[:-4]  # strip .mp4
         for f in os.listdir(VIDEO_DIR)
-        if f.endswith(".mp4")
+        if f.endswith(".mp4") and not f.endswith("_masked.mp4")
     ]
-    return {"videos": sorted(names)}
+    return {"videos": names}
 
 
 @app.get("/videos/{video_name}/stream", summary="Stream / download a stored video")

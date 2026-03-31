@@ -70,14 +70,21 @@ const Workspace = () => {
   const [hasTracked, setHasTracked] = useState(false);
   const [hasSegmented, setHasSegmented] = useState(false);
   const [clearSignal, setClearSignal] = useState(0);
+  const [hidePrompts, setHidePrompts] = useState(false);
 
-  // Keep currentTime in a ref so the masked video toggle can seek to the same position
+  // Keep currentTime in a ref so the masked video toggle can seek to the same position.
+  // Updated via onCurrentTimeChange from VideoPlayer with the raw video.currentTime float.
   const currentTimeRef = useRef(0);
+  // Ref to imperatively seek the video player after a src swap
+  const seekToRef = useRef<((time: number) => void) | null>(null);
 
   const handleFrameIdxChange = useCallback((idx: number) => {
     setFrameIdx(idx);
-    currentTimeRef.current = idx / fps;
-  }, [fps]);
+  }, []);
+
+  const handleCurrentTimeChange = useCallback((t: number) => {
+    currentTimeRef.current = t;
+  }, []);
 
   const setAndRememberVideoUrl = (url: string) => {
     setOriginalVideoUrl(url);
@@ -175,13 +182,16 @@ const Workspace = () => {
 
   const handleRenderMaskedVideo = useCallback(async () => {
     setIsRenderingMasked(true);
+    const savedTime = currentTimeRef.current;
     try {
       const result = await renderMaskedVideo(videoName);
       const url = `${API_BASE}${result.video_url}?t=${Date.now()}`;
       setMaskedVideoUrl(url);
-      // Switch to masked view immediately
+      // Switch to masked view and seek to same frame after load
       setVideoUrl(url);
       setShowingMasked(true);
+      // Seek after the new video has loaded (seekToRef is called in VideoPlayer onLoadedMetadata)
+      seekToRef.current = (seek) => seek(savedTime);
       toast({ title: 'Masked Video Ready', description: 'Showing masked video.' });
     } catch (err: any) {
       toast({ title: 'Render Failed', description: err.message || 'Could not render masked video.', variant: 'destructive' });
@@ -192,6 +202,7 @@ const Workspace = () => {
 
   const handleToggleMaskedVideo = useCallback(() => {
     if (!maskedVideoUrl) return;
+    const savedTime = currentTimeRef.current;
     if (showingMasked) {
       setVideoUrl(originalVideoUrl);
       setShowingMasked(false);
@@ -199,6 +210,8 @@ const Workspace = () => {
       setVideoUrl(maskedVideoUrl);
       setShowingMasked(true);
     }
+    // After src swap VideoPlayer will fire onLoadedMetadata; we pass the desired seek time via ref
+    seekToRef.current = (seek: (t: number) => void) => seek(savedTime);
   }, [showingMasked, maskedVideoUrl, originalVideoUrl]);
 
   const handleClear = () => {
@@ -206,10 +219,12 @@ const Workspace = () => {
     setMaskUrl(null);
     setActiveTool('none');
     setHasSegmented(false);
-    setHasTracked(false);
-    setMaskedVideoUrl(null);
-    setShowingMasked(false);
-    setVideoUrl(originalVideoUrl);
+    // Do NOT reset hasTracked or maskedVideoUrl — tracked masks and any rendered
+    // masked video are still valid. Only prompts/segmentation are being cleared.
+    if (showingMasked) {
+      setVideoUrl(originalVideoUrl);
+      setShowingMasked(false);
+    }
     setClearSignal(prev => prev + 1);
     if (status === 'segmented' || status === 'tracked') setStatus('ready');
   };
@@ -284,10 +299,13 @@ const Workspace = () => {
                 maskUrl={showingMasked ? null : maskUrl}
                 fps={fps}
                 onFrameIdxChange={handleFrameIdxChange}
+                onCurrentTimeChange={handleCurrentTimeChange}
                 isPaused={isPaused}
                 onPausedChange={setIsPaused}
                 clearSignal={clearSignal}
                 onVideoSizeChange={setVideoSize}
+                seekToRef={seekToRef}
+                hidePrompts={hidePrompts}
               />
 
               {status === 'tracking' && (
@@ -321,13 +339,17 @@ const Workspace = () => {
               onToggleMaskedVideo={handleToggleMaskedVideo}
               canSegment={canSegment}
               canTrack={hasSegmented}
-              canRenderMasked={hasTracked}
+              canRenderMasked={status !== 'idle' && status !== 'uploading' && status !== 'selecting'}
               isSegmenting={status === 'segmenting'}
               isTracking={status === 'tracking'}
               isRenderingMasked={isRenderingMasked}
               showingMasked={showingMasked}
               maskedVideoReady={maskedVideoUrl !== null}
               isPaused={isPaused}
+              hidePrompts={hidePrompts}
+              onToggleHidePrompts={() => setHidePrompts(v => !v)}
+              annotations={annotations}
+              onAnnotationsChange={setAnnotations}
             />
           </div>
         )}

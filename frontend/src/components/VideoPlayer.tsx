@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, useCallback } from 'react';
+import { useRef, useState, useEffect, useCallback, MutableRefObject } from 'react';
 import { Play, Pause } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
@@ -27,12 +27,19 @@ interface VideoPlayerProps {
   onPausedChange: (paused: boolean) => void;
   clearSignal?: number;
   onVideoSizeChange?: (size: { w: number; h: number }) => void;
+  /** Called with the raw video.currentTime whenever it changes */
+  onCurrentTimeChange?: (t: number) => void;
+  /** Ref whose .current is a callback (seekFn) => void, called after onLoadedMetadata to seek to a time */
+  seekToRef?: MutableRefObject<((seekFn: (t: number) => void) => void) | null>;
+  /** When true, annotation overlays (points, boxes, polygons) are not rendered */
+  hidePrompts?: boolean;
 }
 
 const VideoPlayer = ({
   videoUrl, activeTool, annotations, onAnnotationsChange,
-  maskUrl, fps, onFrameIdxChange,
+  maskUrl, fps, onFrameIdxChange, onCurrentTimeChange,
   isPaused, onPausedChange, clearSignal, onVideoSizeChange,
+  seekToRef, hidePrompts = false,
 }: VideoPlayerProps) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -51,6 +58,17 @@ const VideoPlayer = ({
       setDrawingBox(null);
     }
   }, [clearSignal]);
+
+  // Handle __undoPolygonPoint signal from AnnotationToolbar
+  useEffect(() => {
+    if ((annotations as any).__undoPolygonPoint) {
+      // Pop the last in-progress polygon point
+      setCurrentPolygon(prev => prev.length > 0 ? prev.slice(0, -1) : prev);
+      // Clean the flag so it doesn't re-trigger
+      const { __undoPolygonPoint, ...clean } = annotations as any;
+      onAnnotationsChange(clean as Annotations);
+    }
+  }, [annotations, onAnnotationsChange]);
 
   // Load single-frame mask overlay (used after segmentation, shown while paused)
   useEffect(() => {
@@ -108,6 +126,9 @@ const VideoPlayer = ({
       ctx.drawImage(maskImage, rect.offsetX, rect.offsetY, rect.dw, rect.dh);
       ctx.globalAlpha = 1;
     }
+
+    // Skip annotation overlays when hidePrompts is true
+    if (hidePrompts) return;
 
     // Positive points
     annotations.positivePoints.forEach(p => {
@@ -215,7 +236,7 @@ const VideoPlayer = ({
         });
       }
     }
-  }, [annotations, drawingBox, currentPolygon, maskImage, isPaused, videoToCanvas, getDisplayRect]);
+  }, [annotations, drawingBox, currentPolygon, maskImage, isPaused, videoToCanvas, getDisplayRect, hidePrompts]);
 
   useEffect(() => { drawCanvas(); }, [drawCanvas]);
 
@@ -239,6 +260,29 @@ const VideoPlayer = ({
     return () => ro.disconnect();
   }, [drawCanvas]);
 
+  const seekVideo = useCallback((time: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    // The browser snaps to the nearest decodable frame, so don't update state
+    // here — the `seeked` event handler below reads back the actual landed time.
+    video.currentTime = time;
+  }, []);
+
+  // After seek completes, sync state from actual landed currentTime
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const onSeeked = () => {
+      const t = video.currentTime;
+      setCurrentTime(t);
+      onCurrentTimeChange?.(t);
+      onFrameIdxChange(Math.floor(t * (fps || 30)));
+      drawCanvas();
+    };
+    video.addEventListener('seeked', onSeeked);
+    return () => video.removeEventListener('seeked', onSeeked);
+  }, [fps, onFrameIdxChange, drawCanvas]);
+
   const togglePlay = () => {
     const video = videoRef.current;
     if (!video) return;
@@ -247,12 +291,7 @@ const VideoPlayer = ({
   };
 
   const handleSeek = (value: number[]) => {
-    const video = videoRef.current;
-    if (!video) return;
-    video.currentTime = value[0];
-    setCurrentTime(value[0]);
-    onFrameIdxChange(Math.floor(value[0] * (fps || 30)));
-    drawCanvas();
+    seekVideo(value[0]);
   };
 
   const getCanvasCoords = (e: React.MouseEvent) => {
@@ -341,10 +380,18 @@ const VideoPlayer = ({
             onVideoSizeChange?.(size);
             v.pause();
             onPausedChange(true);
+
+            // If a seekTo callback was queued (e.g. after masked/original video swap), run it now
+            if (seekToRef?.current) {
+              const cb = seekToRef.current;
+              seekToRef.current = null;
+              cb(seekVideo);
+            }
           }}
           onTimeUpdate={(e) => {
             const t = e.currentTarget.currentTime;
             setCurrentTime(t);
+            onCurrentTimeChange?.(t);
             onFrameIdxChange(Math.floor(t * (fps || 30)));
           }}
           onPause={() => onPausedChange(true)}
