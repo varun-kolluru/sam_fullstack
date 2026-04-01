@@ -33,14 +33,14 @@ const emptyAnnotations: Annotations = {
 
 // Palette of distinct colours for objects (hex for UI, rgb for API)
 export const OBJECT_PALETTE: { hex: string; r: number; g: number; b: number }[] = [
-  { hex: '#1d9e75', r: 29,  g: 158, b: 117 },
-  { hex: '#3b63eb', r: 59,  g: 99,  b: 235 },
-  { hex: '#f97316', r: 249, g: 115, b: 22  },
-  { hex: '#dc2626', r: 220, g: 38,  b: 38  },
-  { hex: '#9333ea', r: 147, g: 51,  b: 234 },
-  { hex: '#0891b2', r: 8,   g: 145, b: 178 },
-  { hex: '#db2777', r: 219, g: 39,  b: 119 },
-  { hex: '#ca8a04', r: 202, g: 138, b: 4   },
+  { hex: '#1d9e75', r: 29, g: 158, b: 117 },
+  { hex: '#3b63eb', r: 59, g: 99, b: 235 },
+  { hex: '#f97316', r: 249, g: 115, b: 22 },
+  { hex: '#dc2626', r: 220, g: 38, b: 38 },
+  { hex: '#9333ea', r: 147, g: 51, b: 234 },
+  { hex: '#0891b2', r: 8, g: 145, b: 178 },
+  { hex: '#db2777', r: 219, g: 39, b: 119 },
+  { hex: '#ca8a04', r: 202, g: 138, b: 4 },
 ];
 
 function polygonToBinaryMaskB64(polygons: Point[][], width: number, height: number): string {
@@ -171,26 +171,26 @@ const Workspace = () => {
   const restoreObjectsFromMasks = useCallback(async (name: string) => {
     try {
       const { objects: labelMap } = await getObjectLabels(name);
-      
+
       if (Object.keys(labelMap).length > 0) {
         // Build TrackedObject array from label map
         const restoredObjects: TrackedObject[] = [];
         const restoredAnnotationsMap: Record<number, Annotations> = {};
-        
+
         for (const [objIdStr, label] of Object.entries(labelMap)) {
           const objId = parseInt(objIdStr, 10);
           const color = OBJECT_PALETTE[(objId - 1) % OBJECT_PALETTE.length];
           restoredObjects.push({ id: objId, label, color });
           restoredAnnotationsMap[objId] = emptyAnnotations;
         }
-        
+
         // Sort by id
         restoredObjects.sort((a, b) => a.id - b.id);
-        
+
         setObjects(restoredObjects);
         setAnnotationsMap(restoredAnnotationsMap);
         setActiveObjectId(restoredObjects[0]?.id ?? 1);
-        
+
         toast({
           title: 'Objects Restored',
           description: `Found ${restoredObjects.length} existing object(s) with masks.`,
@@ -209,10 +209,10 @@ const Workspace = () => {
       setVideoName(info.video_name);
       setFps(info.fps || 30);
       setAndRememberVideoUrl(getVideoStreamUrl(info.video_name));
-      
+
       // Restore objects from existing masks
       await restoreObjectsFromMasks(info.video_name);
-      
+
       setStatus('ready');
       toast({ title: 'Video Loaded', description: `"${info.video_name}" ready (${info.total_frames} frames).` });
     } catch {
@@ -249,11 +249,11 @@ const Workspace = () => {
   const handleSegment = useCallback(async () => {
     if (!canSegment) return;
     setStatus('segmenting');
-    
+
     // Get the current object's label
     const currentObject = objects.find(o => o.id === activeObjectId);
     const objLabel = currentObject?.label ?? `Object ${activeObjectId}`;
-    
+
     try {
       let result;
       if (hasPolygons) {
@@ -305,7 +305,7 @@ const Workspace = () => {
       const progressInterval = setInterval(() => {
         setTrackingProgress(prev => Math.min(prev + Math.random() * 8, 90));
       }, 600);
-      const result = await propagate(videoName, frameIdx, frameIdx + 50);
+      const result = await propagate(videoName, frameIdx, null);
       clearInterval(progressInterval);
       setTrackingProgress(100);
       setStatus('tracked');
