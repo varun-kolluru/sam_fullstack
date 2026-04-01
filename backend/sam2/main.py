@@ -7,7 +7,7 @@ Directory layout
 storage/
   videos/<video_name>.mp4
   frames/<video_name>/00000.jpg …
-  masks/<video_name>/00000_<obj_id>.png …
+  masks/<video_name>/00000_<obj_id>_<label>.png …
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from __future__ import annotations
 import base64
 import io
 import os
+import re
 import uuid
 
 import cv2
@@ -73,6 +74,66 @@ def _obj_color_bgr(obj_id: int, palette: dict[int, tuple[int, int, int]] | None 
         return palette[obj_id]
     idx = (obj_id - 1) % len(_DEFAULT_PALETTE_BGR)
     return _DEFAULT_PALETTE_BGR[idx]
+
+# ---------------------------------------------------------------------------
+# Label and filename helpers
+# ---------------------------------------------------------------------------
+
+def _sanitize_label(label: str) -> str:
+    """Sanitize label for use in filename."""
+    # Replace spaces and special chars with underscore
+    safe = "".join(c if c.isalnum() or c in ('-', '_') else '_' for c in label)
+    # Limit length
+    return safe[:50] if safe else "object"
+
+
+def _parse_mask_filename(filename: str) -> tuple[int, int, str] | None:
+    """
+    Parse mask filename to extract frame_idx, obj_id, and label.
+    Expected format: {frame_idx:05d}_{obj_id}_{label}.png
+    Returns: (frame_idx, obj_id, label) or None if parsing fails
+    """
+    if not filename.endswith('.png'):
+        return None
+    
+    # Remove .png extension
+    name = filename[:-4]
+    
+    # Split by underscore
+    parts = name.split('_', 2)  # Split into max 3 parts
+    
+    if len(parts) >= 2:
+        try:
+            frame_idx = int(parts[0])
+            obj_id = int(parts[1])
+            label = parts[2] if len(parts) > 2 else f"Object {obj_id}"
+            return (frame_idx, obj_id, label)
+        except ValueError:
+            pass
+    
+    return None
+
+
+def _get_object_labels_from_masks(video_name: str) -> dict[str, str]:
+    """
+    Extract object labels from mask filenames in the masks directory.
+    Returns: dict mapping obj_id (as string) -> label
+    """
+    mdir = _mask_dir(video_name)
+    if not os.path.isdir(mdir):
+        return {}
+    
+    labels_map: dict[str, str] = {}
+    
+    for filename in os.listdir(mdir):
+        parsed = _parse_mask_filename(filename)
+        if parsed:
+            _, obj_id, label = parsed
+            # Store the most recent label for each obj_id
+            labels_map[str(obj_id)] = label
+    
+    return labels_map
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -136,6 +197,7 @@ class SegmentPointsRequest(BaseModel):
     video_name: str
     frame_idx: int
     obj_id: int = Field(1, description="Object ID – use different IDs for different objects.")
+    obj_label: str = Field("Object", description="Object label for display.")
     positive_points: list[list[int]] = Field(default_factory=list)
     negative_points: list[list[int]] = Field(default_factory=list)
     box: list[int] | None = None
@@ -145,6 +207,7 @@ class SegmentMaskRequest(BaseModel):
     video_name: str
     frame_idx: int
     obj_id: int = Field(1, description="Object ID.")
+    obj_label: str = Field("Object", description="Object label for display.")
     mask_b64: str
 
 
@@ -176,11 +239,16 @@ class RenderMaskedVideoRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 def _save_mask_and_respond(
-    mask: np.ndarray, video_name: str, frame_idx: int, obj_id: int
+    mask: np.ndarray, video_name: str, frame_idx: int, obj_id: int, obj_label: str
 ) -> dict:
+    """
+    Save mask with label in filename.
+    Filename format: {frame_idx:05d}_{obj_id}_{sanitized_label}.png
+    """
     mdir = _mask_dir(video_name)
     os.makedirs(mdir, exist_ok=True)
-    fname = f"{frame_idx:05d}_{obj_id}.png"
+    safe_label = _sanitize_label(obj_label)
+    fname = f"{frame_idx:05d}_{obj_id}_{safe_label}.png"
     path = os.path.join(mdir, fname)
     Image.fromarray(mask).save(path)
     return {"mask_path": f"/storage/masks/{video_name}/{fname}"}
@@ -238,19 +306,19 @@ async def upload_video(
         if os.path.exists(_video_path(video_name)):
             raise HTTPException(
                 status_code=409,
-                detail=f"A video named '{video_name}' already exists.",
+                detail=f"Video '{video_name}' already exists. Delete it first or choose a different name.",
             )
     else:
-        video_name = str(uuid.uuid4())
+        video_name = _safe_video_name(video.filename or f"video_{uuid.uuid4().hex[:8]}")
 
     vpath = _video_path(video_name)
+    with open(vpath, "wb") as f:
+        f.write(await video.read())
+
     fdir = _frame_dir(video_name)
-
-    with open(vpath, "wb") as fh:
-        fh.write(await video.read())
-
-    total_frames, fps = _extract_frames(vpath, fdir)
-    if total_frames == 0:
+    try:
+        total_frames, fps = _extract_frames(vpath, fdir)
+    except Exception:
         os.remove(vpath)
         raise HTTPException(status_code=422, detail="Could not extract frames from the video.")
 
@@ -300,7 +368,7 @@ def segment_frame_points(req: SegmentPointsRequest):
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    return _save_mask_and_respond(mask, req.video_name, req.frame_idx, req.obj_id)
+    return _save_mask_and_respond(mask, req.video_name, req.frame_idx, req.obj_id, req.obj_label)
 
 
 @app.post("/segment-frame/mask", summary="Segment using a binary mask prompt")
@@ -322,7 +390,7 @@ def segment_frame_mask(req: SegmentMaskRequest):
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    return _save_mask_and_respond(mask, req.video_name, req.frame_idx, req.obj_id)
+    return _save_mask_and_respond(mask, req.video_name, req.frame_idx, req.obj_id, req.obj_label)
 
 
 @app.post("/propagate", summary="Propagate segmentation masks through the video")
@@ -334,6 +402,9 @@ def propagate(req: PropagateRequest):
         raise HTTPException(status_code=400, detail="end_frame_idx must be >= start_frame_idx.")
 
     out_dir = _mask_dir(video_name)
+    # Get existing labels from mask filenames
+    obj_labels = _get_object_labels_from_masks(video_name)
+    
     print(req.start_frame_idx, req.end_frame_idx)
     try:
         total = sam2.propagate_and_save(
@@ -341,6 +412,7 @@ def propagate(req: PropagateRequest):
             out_dir=out_dir,
             start_frame_idx=req.start_frame_idx,
             end_frame_idx=req.end_frame_idx,
+            obj_labels=obj_labels,  # Pass labels to SAM2Service
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -377,6 +449,17 @@ def list_masks(video_name: str):
         "video_name": video_name,
         "masks": [f"/storage/masks/{video_name}/{f}" for f in files],
     }
+
+
+@app.get("/videos/{video_name}/objects", summary="Get object labels from mask filenames")
+def get_objects(video_name: str):
+    """
+    Extract and return object labels from mask filenames.
+    Response: { "objects": { "1": "Object_1", "2": "Person", ... } }
+    """
+    video_name = _safe_video_name(video_name)
+    labels_map = _get_object_labels_from_masks(video_name)
+    return {"objects": labels_map}
 
 
 @app.delete("/videos/{video_name}", summary="Delete a video and all associated data")
@@ -441,13 +524,10 @@ def render_masked_video(req: RenderMaskedVideoRequest):
     # Collect all obj_ids present in the mask directory
     all_obj_ids: set[int] = set()
     for fname in os.listdir(mdir):
-        if fname.endswith(".png"):
-            parts = fname.replace(".png", "").split("_")
-            if len(parts) == 2:
-                try:
-                    all_obj_ids.add(int(parts[1]))
-                except ValueError:
-                    pass
+        parsed = _parse_mask_filename(fname)
+        if parsed:
+            _, obj_id, _ = parsed
+            all_obj_ids.add(obj_id)
 
     for fname in frame_files:
         frame_idx = int(fname.replace(".jpg", ""))
@@ -458,10 +538,19 @@ def render_masked_video(req: RenderMaskedVideoRequest):
         overlay = frame.copy()
 
         for obj_id in sorted(all_obj_ids):
-            mask_path = os.path.join(mdir, f"{frame_idx:05d}_{obj_id}.png")
-            if not os.path.exists(mask_path):
+            # Find mask file for this frame and obj_id
+            # Pattern: {frame_idx:05d}_{obj_id}_*.png
+            mask_pattern = f"{frame_idx:05d}_{obj_id}_"
+            mask_file = None
+            for mf in os.listdir(mdir):
+                if mf.startswith(mask_pattern) and mf.endswith('.png'):
+                    mask_file = mf
+                    break
+            
+            if not mask_file:
                 continue
 
+            mask_path = os.path.join(mdir, mask_file)
             mask_img = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
             if mask_img is None:
                 continue

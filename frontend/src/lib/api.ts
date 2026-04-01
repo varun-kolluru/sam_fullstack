@@ -1,8 +1,5 @@
 /**
- * api.ts  –  updated renderMaskedVideo to accept per-object RGB colours.
- *
- * Replace the existing renderMaskedVideo export in your api.ts with this version.
- * All other exports stay the same.
+ * api.ts  –  updated to send obj_label in segmentation requests
  */
 
 export const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000';
@@ -81,6 +78,7 @@ export async function segmentFramePoints(body: {
   video_name: string;
   frame_idx: number;
   obj_id: number;
+  obj_label: string;
   positive_points: number[][];
   negative_points: number[][];
   box: number[] | null;
@@ -97,6 +95,7 @@ export async function segmentFrameMask(body: {
   video_name: string;
   frame_idx: number;
   obj_id: number;
+  obj_label: string;
   mask_b64: string;
 }): Promise<{ mask_path: string }> {
   const res = await fetch(`${API_BASE}/segment-frame/mask`, {
@@ -123,6 +122,19 @@ export async function propagate(
       end_frame_idx: endFrameIdx ?? null,
     }),
   });
+  return handleResponse(res);
+}
+
+// ── Object metadata ───────────────────────────────────────────────────────────
+
+/**
+ * Get object labels from mask filenames for a video.
+ * Returns a map of obj_id (as string) -> label
+ */
+export async function getObjectLabels(
+  videoName: string,
+): Promise<{ objects: Record<string, string> }> {
+  const res = await fetch(`${API_BASE}/videos/${encodeURIComponent(videoName)}/objects`);
   return handleResponse(res);
 }
 

@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Brain, ArrowLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -16,6 +16,7 @@ import {
   propagate,
   renderMaskedVideo,
   getVideoStreamUrl,
+  getObjectLabels,
   API_BASE,
 } from '@/lib/api';
 
@@ -152,7 +153,7 @@ const Workspace = () => {
     setObjects(prev => prev.map(o => o.id === id ? { ...o, label } : o));
   }, []);
 
-  // ── Video loading ─────────────────────────────────────────────────────────
+  // ── Video loading & Object restoration ────────────────────────────────────
 
   const handleFrameIdxChange = useCallback((idx: number) => setFrameIdx(idx), []);
   const handleCurrentTimeChange = useCallback((t: number) => { currentTimeRef.current = t; }, []);
@@ -162,6 +163,43 @@ const Workspace = () => {
     setVideoUrl(url);
   };
 
+  /**
+   * Restore objects from existing mask files when selecting a video
+   */
+  const restoreObjectsFromMasks = useCallback(async (name: string) => {
+    try {
+      const { objects: labelMap } = await getObjectLabels(name);
+      
+      if (Object.keys(labelMap).length > 0) {
+        // Build TrackedObject array from label map
+        const restoredObjects: TrackedObject[] = [];
+        const restoredAnnotationsMap: Record<number, Annotations> = {};
+        
+        for (const [objIdStr, label] of Object.entries(labelMap)) {
+          const objId = parseInt(objIdStr, 10);
+          const color = OBJECT_PALETTE[(objId - 1) % OBJECT_PALETTE.length];
+          restoredObjects.push({ id: objId, label, color });
+          restoredAnnotationsMap[objId] = emptyAnnotations;
+        }
+        
+        // Sort by id
+        restoredObjects.sort((a, b) => a.id - b.id);
+        
+        setObjects(restoredObjects);
+        setAnnotationsMap(restoredAnnotationsMap);
+        setActiveObjectId(restoredObjects[0]?.id ?? 1);
+        
+        toast({
+          title: 'Objects Restored',
+          description: `Found ${restoredObjects.length} existing object(s) with masks.`,
+        });
+      }
+    } catch (err) {
+      console.error('Failed to restore objects:', err);
+      // If restoration fails, keep default single object
+    }
+  }, [toast]);
+
   const handleSelectExisting = useCallback(async (name: string) => {
     setStatus('selecting');
     try {
@@ -169,13 +207,17 @@ const Workspace = () => {
       setVideoName(info.video_name);
       setFps(info.fps || 30);
       setAndRememberVideoUrl(getVideoStreamUrl(info.video_name));
+      
+      // Restore objects from existing masks
+      await restoreObjectsFromMasks(info.video_name);
+      
       setStatus('ready');
       toast({ title: 'Video Loaded', description: `"${info.video_name}" ready (${info.total_frames} frames).` });
     } catch {
       toast({ title: 'Selection Failed', description: 'Could not load video from server.', variant: 'destructive' });
       setStatus('idle');
     }
-  }, [toast]);
+  }, [toast, restoreObjectsFromMasks]);
 
   const handleUploadNew = useCallback(async (file: File, name: string) => {
     setStatus('uploading');
@@ -205,20 +247,31 @@ const Workspace = () => {
   const handleSegment = useCallback(async () => {
     if (!canSegment) return;
     setStatus('segmenting');
+    
+    // Get the current object's label
+    const currentObject = objects.find(o => o.id === activeObjectId);
+    const objLabel = currentObject?.label ?? `Object ${activeObjectId}`;
+    
     try {
       let result;
       if (hasPolygons) {
         const maskB64 = polygonToBinaryMaskB64(annotations.polygons, videoSize.w, videoSize.h);
         result = await segmentFrameMask({
-          video_name: videoName, frame_idx: frameIdx,
-          obj_id: activeObjectId, mask_b64: maskB64,
+          video_name: videoName,
+          frame_idx: frameIdx,
+          obj_id: activeObjectId,
+          obj_label: objLabel,  // Include label
+          mask_b64: maskB64,
         });
       } else {
         const lastBox = annotations.boxes.length > 0
           ? (() => { const b = annotations.boxes[annotations.boxes.length - 1]; return [b.x1, b.y1, b.x2, b.y2]; })()
           : null;
         result = await segmentFramePoints({
-          video_name: videoName, frame_idx: frameIdx, obj_id: activeObjectId,
+          video_name: videoName,
+          frame_idx: frameIdx,
+          obj_id: activeObjectId,
+          obj_label: objLabel,  // Include label
           positive_points: annotations.positivePoints.map(p => [p.x, p.y]),
           negative_points: annotations.negativePoints.map(p => [p.x, p.y]),
           box: lastBox,
@@ -232,7 +285,7 @@ const Workspace = () => {
       }
       setSegmentedObjects(prev => new Set(prev).add(activeObjectId));
       setStatus('segmented');
-      toast({ title: 'Segmentation Complete', description: `Mask for "${objects.find(o => o.id === activeObjectId)?.label}" ready.` });
+      toast({ title: 'Segmentation Complete', description: `Mask for "${objLabel}" ready.` });
     } catch (err: any) {
       toast({ title: 'Segmentation Failed', description: err.message || 'Could not run segmentation.', variant: 'destructive' });
       setStatus('ready');

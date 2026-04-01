@@ -5,6 +5,12 @@ from PIL import Image
 from sam2.build_sam import build_sam2_video_predictor
 
 
+def _sanitize_label(label: str) -> str:
+    """Sanitize label for use in filename."""
+    safe = "".join(c if c.isalnum() or c in ('-', '_') else '_' for c in label)
+    return safe[:50] if safe else "object"
+
+
 class SAM2Service:
     def __init__(
         self,
@@ -182,7 +188,8 @@ class SAM2Service:
         video_name: str,
         out_dir: str,
         start_frame_idx: int = 0,
-        end_frame_idx: int | None = None
+        end_frame_idx: int | None = None,
+        obj_labels: dict[str, str] | None = None,
     ) -> int:
         """
         Propagate the current prompts through the video and save per-frame masks.
@@ -191,7 +198,7 @@ class SAM2Service:
         ----------
         start_frame_idx : frame to begin propagation from (default 0)
         end_frame_idx   : last frame to include, inclusive (default = all frames)
-        reverse         : propagate backwards if True
+        obj_labels      : dict mapping obj_id (as string) -> label
 
         Returns
         -------
@@ -202,6 +209,10 @@ class SAM2Service:
 
         os.makedirs(out_dir, exist_ok=True)
         saved = 0
+
+        # Default labels if not provided
+        if obj_labels is None:
+            obj_labels = {}
 
         # Calculate max_frame_num_to_track from the range
         max_frame_num_to_track = None
@@ -216,7 +227,13 @@ class SAM2Service:
             ):
                 for i, out_obj_id in enumerate(out_obj_ids):
                     mask = self._logits_to_uint8(out_mask_logits[i])
-                    path = os.path.join(out_dir, f"{out_frame_idx:05d}_{out_obj_id}.png")
+                    
+                    # Get label for this object, default to "Object {id}"
+                    label = obj_labels.get(str(out_obj_id), f"Object_{out_obj_id}")
+                    safe_label = _sanitize_label(label)
+                    
+                    # Save with format: frameidx_objid_label.png
+                    path = os.path.join(out_dir, f"{out_frame_idx:05d}_{out_obj_id}_{safe_label}.png")
                     Image.fromarray(mask).save(path)
                     saved += 1
 
