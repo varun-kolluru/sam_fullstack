@@ -17,6 +17,7 @@ import {
   renderMaskedVideo,
   getVideoStreamUrl,
   getObjectLabels,
+  getMaskPolygons,
   API_BASE,
 } from '@/lib/api';
 
@@ -82,6 +83,7 @@ const Workspace = () => {
   const [hasTracked, setHasTracked] = useState(false);
   const [clearSignal, setClearSignal] = useState(0);
   const [hidePrompts, setHidePrompts] = useState(false);
+  const [isGettingPolygons, setIsGettingPolygons] = useState(false);
 
   // ── Multi-object state ────────────────────────────────────────────────────
   // Each TrackedObject has { id, label, color } where id is the SAM-2 obj_id.
@@ -317,6 +319,68 @@ const Workspace = () => {
     }
   }, [videoName, frameIdx, segmentedObjects.size, toast]);
 
+  // ── Get Polygons (mask → editable polygon vertices) ───────────────────────
+
+  const canGetPolygons = status !== 'idle' && status !== 'uploading' && status !== 'selecting';
+
+  const handleGetPolygons = useCallback(async () => {
+    setIsGettingPolygons(true);
+
+    // If watching the masked video, switch back to the original first so the
+    // polygon overlay is visible on the correct canvas.
+    if (showingMasked) {
+      const savedTime = currentTimeRef.current;
+      setVideoUrl(originalVideoUrl);
+      setShowingMasked(false);
+      seekToRef.current = (seek: (t: number) => void) => seek(savedTime);
+    }
+
+    // Must be paused to annotate — pause the video if it's playing.
+    setIsPaused(true);
+
+    try {
+      const { polygons } = await getMaskPolygons(videoName, frameIdx, activeObjectId);
+      if (!polygons.length) {
+        toast({
+          title: 'No Polygons Found',
+          description: 'No saved mask for this frame/object yet. Segment the frame first.',
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      // Load polygons into annotations — this also makes canSegment true
+      setAnnotations({ ...annotations, polygons });
+
+      // Mark this object as segmented so Track All stays enabled
+      setSegmentedObjects(prev => new Set(prev).add(activeObjectId));
+
+      // Switch to polygon tool so vertices are immediately visible and draggable
+      setActiveTool('polygon');
+
+      // Reflect segmented status if not already past it
+      if (status === 'ready') setStatus('segmented');
+
+      toast({
+        title: 'Polygons Loaded',
+        description: `${polygons.length} polygon${polygons.length > 1 ? 's' : ''} imported — drag any vertex to refine, then hit Segment.`,
+      });
+    } catch (err: any) {
+      toast({
+        title: 'Failed to Get Polygons',
+        description: err.message || 'Could not fetch mask polygons.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsGettingPolygons(false);
+    }
+  }, [
+    videoName, frameIdx, activeObjectId,
+    annotations, setAnnotations,
+    showingMasked, originalVideoUrl,
+    status, toast,
+  ]);
+
   // ── Masked video ──────────────────────────────────────────────────────────
 
   const handleRenderMaskedVideo = useCallback(async () => {
@@ -509,12 +573,15 @@ const Workspace = () => {
               onClear={handleClear}
               onRenderMaskedVideo={handleRenderMaskedVideo}
               onToggleMaskedVideo={handleToggleMaskedVideo}
+              onGetPolygons={handleGetPolygons}
               canSegment={canSegment}
               canTrack={canTrack}
               canRenderMasked={status !== 'idle' && status !== 'uploading' && status !== 'selecting'}
+              canGetPolygons={canGetPolygons}
               isSegmenting={status === 'segmenting'}
               isTracking={status === 'tracking'}
               isRenderingMasked={isRenderingMasked}
+              isGettingPolygons={isGettingPolygons}
               showingMasked={showingMasked}
               maskedVideoReady={maskedVideoUrl !== null}
               isPaused={isPaused}

@@ -65,6 +65,12 @@ const VideoPlayer = ({
   const [currentPolygon, setCurrentPolygon] = useState<Point[]>([]);
   const [maskImage, setMaskImage] = useState<HTMLImageElement | null>(null);
 
+  // Drag-to-edit polygon vertices
+  const dragRef = useRef<{ polyIdx: number; ptIdx: number } | null>(null);
+  const [isDraggingVertex, setIsDraggingVertex] = useState(false);
+  // Hover state for cursor feedback
+  const [hoveringVertex, setHoveringVertex] = useState(false);
+
   useEffect(() => {
     if (clearSignal) { setCurrentPolygon([]); setDrawingBox(null); }
   }, [clearSignal]);
@@ -113,6 +119,21 @@ const VideoPlayer = ({
     if (!rect) return null;
     return { x: vx * rect.scale + rect.offsetX, y: vy * rect.scale + rect.offsetY };
   }, [getDisplayRect]);
+
+  /** Returns { polyIdx, ptIdx } of the nearest polygon vertex within `threshold` canvas px, or null. */
+  const hitTestVertex = useCallback((cx: number, cy: number, threshold = 10): { polyIdx: number; ptIdx: number } | null => {
+    let best: { polyIdx: number; ptIdx: number } | null = null;
+    let bestDist = threshold;
+    annotations.polygons.forEach((poly, polyIdx) => {
+      poly.forEach((pt, ptIdx) => {
+        const cp = videoToCanvas(pt.x, pt.y);
+        if (!cp) return;
+        const d = Math.hypot(cx - cp.x, cy - cp.y);
+        if (d < bestDist) { bestDist = d; best = { polyIdx, ptIdx }; }
+      });
+    });
+    return best;
+  }, [annotations.polygons, videoToCanvas]);
 
   const drawCanvas = useCallback(() => {
     const canvas = canvasRef.current;
@@ -188,7 +209,7 @@ const VideoPlayer = ({
     });
 
     // Completed polygons
-    annotations.polygons.forEach(poly => {
+    annotations.polygons.forEach((poly, polyIdx) => {
       if (poly.length < 2) return;
       ctx.beginPath();
       const first = videoToCanvas(poly[0].x, poly[0].y);
@@ -204,6 +225,29 @@ const VideoPlayer = ({
       ctx.stroke();
       ctx.fillStyle = lightColor;
       ctx.fill();
+
+      // Render draggable vertex handles when polygon tool is active
+      if (activeTool === 'polygon') {
+        poly.forEach((pt, ptIdx) => {
+          const cp = videoToCanvas(pt.x, pt.y);
+          if (!cp) return;
+          const isDragging =
+            dragRef.current?.polyIdx === polyIdx && dragRef.current?.ptIdx === ptIdx;
+          // Outer ring
+          ctx.beginPath();
+          ctx.arc(cp.x, cp.y, isDragging ? 9 : 7, 0, Math.PI * 2);
+          ctx.fillStyle = isDragging ? solidColor : hexToRgba(activeObjectColor, 0.85);
+          ctx.fill();
+          ctx.strokeStyle = '#fff';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+          // Inner dot
+          ctx.beginPath();
+          ctx.arc(cp.x, cp.y, 3, 0, Math.PI * 2);
+          ctx.fillStyle = '#fff';
+          ctx.fill();
+        });
+      }
     });
 
     // In-progress box
@@ -304,8 +348,12 @@ const VideoPlayer = ({
 
   const handleCanvasClick = (e: React.MouseEvent) => {
     if (!isPaused || activeTool === 'none') return;
+    // Ignore click if we just finished dragging a vertex
+    if (dragRef.current !== null) return;
     const coords = getCanvasCoords(e);
     if (!coords) return;
+    // In polygon mode, don't add a point if the click was on an existing vertex
+    if (activeTool === 'polygon' && hitTestVertex(coords.cx, coords.cy)) return;
     const vp = canvasToVideo(coords.cx, coords.cy);
     if (!vp) return;
     if (activeTool === 'positive') {
@@ -325,24 +373,67 @@ const VideoPlayer = ({
   };
 
   const handleMouseDown = (e: React.MouseEvent) => {
-    if (!isPaused || activeTool !== 'box') return;
+    if (!isPaused) return;
     const coords = getCanvasCoords(e);
     if (!coords) return;
+
+    // Polygon tool: check if clicking near an existing vertex → drag it
+    if (activeTool === 'polygon' && annotations.polygons.length > 0) {
+      const hit = hitTestVertex(coords.cx, coords.cy);
+      if (hit) {
+        dragRef.current = hit;
+        setIsDraggingVertex(true);
+        return; // Don't fall through to box logic
+      }
+    }
+
+    if (activeTool !== 'box') return;
     const vp = canvasToVideo(coords.cx, coords.cy);
     if (!vp) return;
     setDrawingBox({ start: vp, current: vp });
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
-    if (!drawingBox) return;
     const coords = getCanvasCoords(e);
     if (!coords) return;
+
+    // Dragging a polygon vertex
+    if (isDraggingVertex && dragRef.current) {
+      const vp = canvasToVideo(coords.cx, coords.cy);
+      if (!vp) return;
+      const { polyIdx, ptIdx } = dragRef.current;
+      const updatedPolygons = annotations.polygons.map((poly, pi) =>
+        pi === polyIdx
+          ? poly.map((pt, ti) => (ti === ptIdx ? vp : pt))
+          : poly,
+      );
+      onAnnotationsChange({ ...annotations, polygons: updatedPolygons });
+      return;
+    }
+
+    // Hover detection for cursor feedback (polygon tool only)
+    if (activeTool === 'polygon' && isPaused) {
+      const hit = hitTestVertex(coords.cx, coords.cy);
+      setHoveringVertex(hit !== null);
+    } else {
+      setHoveringVertex(false);
+    }
+
+    // Box drawing
+    if (!drawingBox) return;
     const vp = canvasToVideo(coords.cx, coords.cy);
     if (!vp) return;
     setDrawingBox(prev => prev ? { ...prev, current: vp } : null);
   };
 
   const handleMouseUp = () => {
+    // End vertex drag
+    if (isDraggingVertex) {
+      dragRef.current = null;
+      setIsDraggingVertex(false);
+      return;
+    }
+
     if (!drawingBox) return;
     const { start, current } = drawingBox;
     const x1 = Math.min(start.x, current.x);
@@ -361,7 +452,12 @@ const VideoPlayer = ({
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const cursorClass = isPaused && activeTool !== 'none' ? 'cursor-crosshair' : 'cursor-default';
+  const cursorClass = (() => {
+    if (!isPaused || activeTool === 'none') return 'cursor-default';
+    if (isDraggingVertex) return 'cursor-grabbing';
+    if (activeTool === 'polygon' && hoveringVertex) return 'cursor-grab';
+    return 'cursor-crosshair';
+  })();
 
   return (
     <div className="flex flex-col gap-3">
@@ -405,6 +501,13 @@ const VideoPlayer = ({
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
+          onMouseLeave={() => {
+            setHoveringVertex(false);
+            if (isDraggingVertex) {
+              dragRef.current = null;
+              setIsDraggingVertex(false);
+            }
+          }}
         />
       </div>
 

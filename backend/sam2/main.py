@@ -462,6 +462,78 @@ def get_objects(video_name: str):
     return {"objects": labels_map}
 
 
+@app.get(
+    "/videos/{video_name}/frames/{frame_idx}/polygons",
+    summary="Convert the saved mask for a frame+object into draggable polygon points",
+)
+def get_mask_polygons(video_name: str, frame_idx: int, obj_id: int = 1):
+    """
+    Reads the mask PNG saved for (video_name, frame_idx, obj_id) and returns
+    the outer contour(s) as a list of polygon point arrays.
+
+    Each polygon is a list of {x, y} objects in **video-pixel** coordinates,
+    already simplified with the Douglas-Peucker algorithm so the frontend
+    gets a manageable number of draggable vertices.
+
+    Response shape:
+        { "polygons": [ [ {"x": int, "y": int}, … ], … ] }
+    """
+    video_name = _safe_video_name(video_name)
+    mdir = _mask_dir(video_name)
+
+    if not os.path.isdir(mdir):
+        raise HTTPException(status_code=404, detail="No masks directory found for this video.")
+
+    # Find the mask file matching frame_idx and obj_id
+    prefix = f"{frame_idx:05d}_{obj_id}_"
+    mask_file = next(
+        (f for f in os.listdir(mdir) if f.startswith(prefix) and f.endswith(".png")),
+        None,
+    )
+    if mask_file is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No mask found for frame {frame_idx}, object {obj_id}. "
+                   "Run segmentation first.",
+        )
+
+    mask_path = os.path.join(mdir, mask_file)
+    mask_img = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+    if mask_img is None:
+        raise HTTPException(status_code=500, detail="Could not read mask file.")
+
+    # Threshold to binary
+    _, binary = cv2.threshold(mask_img, 127, 255, cv2.THRESH_BINARY)
+
+    # Optional: close small holes before contouring
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+
+    # Find external contours only
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_TC89_KCOS)
+
+    if not contours:
+        return {"polygons": []}
+
+    h, w = mask_img.shape[:2]
+    # Epsilon for Douglas-Peucker: ~0.5 % of the image diagonal gives good simplification
+    diag = (h ** 2 + w ** 2) ** 0.5
+    epsilon = 0.005 * diag
+
+    polygons: list[list[dict]] = []
+    for contour in contours:
+        # Skip tiny noise contours (< 50 px area)
+        if cv2.contourArea(contour) < 50:
+            continue
+        approx = cv2.approxPolyDP(contour, epsilon, closed=True)
+        # approx shape: (N, 1, 2)
+        pts = [{"x": int(pt[0][0]), "y": int(pt[0][1])} for pt in approx]
+        if len(pts) >= 3:
+            polygons.append(pts)
+
+    return {"polygons": polygons}
+
+
 @app.delete("/videos/{video_name}", summary="Delete a video and all associated data")
 def delete_video(video_name: str):
     import shutil

@@ -1,4 +1,4 @@
-import { CirclePlus, CircleMinus, Square, Pentagon, Sparkles, Layers, Trash2, Film, Eye, EyeOff, Undo2 } from 'lucide-react';
+import { CirclePlus, CircleMinus, Square, Pentagon, Sparkles, Layers, Trash2, Film, Eye, EyeOff, Undo2, Shapes } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import type { Annotations } from '@/components/VideoPlayer';
 
@@ -12,12 +12,15 @@ interface AnnotationToolbarProps {
   onClear: () => void;
   onRenderMaskedVideo: () => void;
   onToggleMaskedVideo: () => void;
+  onGetPolygons: () => void;
   canSegment: boolean;
   canTrack: boolean;
   canRenderMasked: boolean;
+  canGetPolygons: boolean;
   isSegmenting: boolean;
   isTracking: boolean;
   isRenderingMasked: boolean;
+  isGettingPolygons: boolean;
   showingMasked: boolean;
   maskedVideoReady: boolean;
   isPaused: boolean;
@@ -34,8 +37,9 @@ interface AnnotationToolbarProps {
 const AnnotationToolbar = ({
   activeTool, onToolChange, onSegment, onTrack, onClear,
   onRenderMaskedVideo, onToggleMaskedVideo,
-  canSegment, canTrack, canRenderMasked,
-  isSegmenting, isTracking, isRenderingMasked,
+  onGetPolygons,
+  canSegment, canTrack, canRenderMasked, canGetPolygons,
+  isSegmenting, isTracking, isRenderingMasked, isGettingPolygons,
   showingMasked, maskedVideoReady,
   isPaused,
   hidePrompts, onToggleHidePrompts,
@@ -175,6 +179,17 @@ const AnnotationToolbar = ({
         >
           <Sparkles className="h-4 w-4" />
           {isSegmenting ? 'Segmenting...' : 'Segment'}
+        </Button>
+
+        <Button
+          variant="outline" size="sm"
+          disabled={isGettingPolygons}
+          onClick={onGetPolygons}
+          className="gap-1.5 border-violet-500/40 text-violet-500 hover:bg-violet-500/10 disabled:opacity-40"
+          title="Fetch the saved mask for this frame and convert it to editable polygon points"
+        >
+          <Shapes className="h-4 w-4" />
+          {isGettingPolygons ? 'Fetching...' : 'Get Polygons'}
         </Button>
 
         <Button

@@ -125,6 +125,26 @@ export async function propagate(
   return handleResponse(res);
 }
 
+// ── Polygon extraction ────────────────────────────────────────────────────────
+
+/**
+ * Fetch the mask saved for (videoName, frameIdx, objId) and return it as
+ * simplified polygon point arrays ready for the annotation canvas.
+ *
+ * Each polygon is an array of { x, y } objects in video-pixel coordinates.
+ */
+export async function getMaskPolygons(
+  videoName: string,
+  frameIdx: number,
+  objId: number,
+): Promise<{ polygons: { x: number; y: number }[][] }> {
+  const url =
+    `${API_BASE}/videos/${encodeURIComponent(videoName)}/frames/${frameIdx}/polygons` +
+    `?obj_id=${objId}`;
+  const res = await fetch(url);
+  return handleResponse(res);
+}
+
 // ── Object metadata ───────────────────────────────────────────────────────────
 
 /**
