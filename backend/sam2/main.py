@@ -7,7 +7,7 @@ Directory layout
 storage/
   videos/<video_name>.mp4
   frames/<video_name>/00000.jpg …
-  masks/<video_name>/00000_<obj_id>.png …
+  masks/<video_name>/00000_<obj_id>_<label>.png …
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from __future__ import annotations
 import base64
 import io
 import os
+import re
 import uuid
 
 import cv2
@@ -44,7 +45,7 @@ app.add_middleware(
 BASE_DIR = "storage"
 VIDEO_DIR = os.path.join(BASE_DIR, "videos")
 FRAME_DIR = os.path.join(BASE_DIR, "frames")
-MASK_DIR = os.path.join(BASE_DIR, "masks")
+MASK_DIR  = os.path.join(BASE_DIR, "masks")
 
 for _d in (VIDEO_DIR, FRAME_DIR, MASK_DIR):
     os.makedirs(_d, exist_ok=True)
@@ -54,12 +55,92 @@ app.mount("/storage", StaticFiles(directory=BASE_DIR), name="storage")
 sam2 = SAM2Service()
 
 # ---------------------------------------------------------------------------
+# Default palette – BGR colours used when the caller doesn't supply one
+# ---------------------------------------------------------------------------
+
+_DEFAULT_PALETTE_BGR: list[tuple[int, int, int]] = [
+    (117, 158,  29),   # obj 1 – teal-green
+    ( 29,  99, 235),   # obj 2 – blue
+    (  0, 165, 255),   # obj 3 – orange
+    (  0,   0, 220),   # obj 4 – red
+    (128,   0, 128),   # obj 5 – purple
+    (  0, 128, 128),   # obj 6 – olive
+    (203, 192, 255),   # obj 7 – pink
+    ( 42, 255, 255),   # obj 8 – yellow
+]
+
+def _obj_color_bgr(obj_id: int, palette: dict[int, tuple[int, int, int]] | None = None) -> tuple[int, int, int]:
+    if palette and obj_id in palette:
+        return palette[obj_id]
+    idx = (obj_id - 1) % len(_DEFAULT_PALETTE_BGR)
+    return _DEFAULT_PALETTE_BGR[idx]
+
+# ---------------------------------------------------------------------------
+# Label and filename helpers
+# ---------------------------------------------------------------------------
+
+def _sanitize_label(label: str) -> str:
+    """Sanitize label for use in filename."""
+    # Replace spaces and special chars with underscore
+    safe = "".join(c if c.isalnum() or c in ('-', '_') else '_' for c in label)
+    # Limit length
+    return safe[:50] if safe else "object"
+
+
+def _parse_mask_filename(filename: str) -> tuple[int, int, str] | None:
+    """
+    Parse mask filename to extract frame_idx, obj_id, and label.
+    Expected format: {frame_idx:05d}_{obj_id}_{label}.png
+    Returns: (frame_idx, obj_id, label) or None if parsing fails
+    """
+    if not filename.endswith('.png'):
+        return None
+    
+    # Remove .png extension
+    name = filename[:-4]
+    
+    # Split by underscore
+    parts = name.split('_', 2)  # Split into max 3 parts
+    
+    if len(parts) >= 2:
+        try:
+            frame_idx = int(parts[0])
+            obj_id = int(parts[1])
+            label = parts[2] if len(parts) > 2 else f"Object {obj_id}"
+            return (frame_idx, obj_id, label)
+        except ValueError:
+            pass
+    
+    return None
+
+
+def _get_object_labels_from_masks(video_name: str) -> dict[str, str]:
+    """
+    Extract object labels from mask filenames in the masks directory.
+    Returns: dict mapping obj_id (as string) -> label
+    """
+    mdir = _mask_dir(video_name)
+    if not os.path.isdir(mdir):
+        return {}
+    
+    labels_map: dict[str, str] = {}
+    
+    for filename in os.listdir(mdir):
+        parsed = _parse_mask_filename(filename)
+        if parsed:
+            _, obj_id, label = parsed
+            # Store the most recent label for each obj_id
+            labels_map[str(obj_id)] = label
+    
+    return labels_map
+
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
 
 def _safe_video_name(raw: str) -> str:
-    """Strip path separators so the name is safe to use as a directory name."""
     return os.path.basename(raw).strip()
 
 
@@ -76,7 +157,6 @@ def _mask_dir(name: str) -> str:
 
 
 def _extract_frames(video_path: str, out_dir: str) -> tuple[int, float]:
-    """Extract every frame from *video_path* into *out_dir* as JPEG files."""
     os.makedirs(out_dir, exist_ok=True)
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
@@ -105,6 +185,10 @@ def _require_frames(name: str) -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# Pydantic models
+# ---------------------------------------------------------------------------
+
 class SelectVideoRequest(BaseModel):
     video_name: str
 
@@ -113,30 +197,18 @@ class SegmentPointsRequest(BaseModel):
     video_name: str
     frame_idx: int
     obj_id: int = Field(1, description="Object ID – use different IDs for different objects.")
-    positive_points: list[list[int]] = Field(
-        default_factory=list,
-        description="List of [x, y] positive click coordinates.",
-    )
-    negative_points: list[list[int]] = Field(
-        default_factory=list,
-        description="List of [x, y] negative click coordinates.",
-    )
-    box: list[int] | None = Field(
-        None,
-        description="Bounding box [x_min, y_min, x_max, y_max]. "
-        "Can be combined with point clicks.",
-    )
+    obj_label: str = Field("Object", description="Object label for display.")
+    positive_points: list[list[int]] = Field(default_factory=list)
+    negative_points: list[list[int]] = Field(default_factory=list)
+    box: list[int] | None = None
 
 
 class SegmentMaskRequest(BaseModel):
     video_name: str
     frame_idx: int
     obj_id: int = Field(1, description="Object ID.")
-    mask_b64: str = Field(
-        ...,
-        description="Base-64 encoded binary mask image (PNG/JPEG). "
-        "Non-zero pixels are treated as foreground.",
-    )
+    obj_label: str = Field("Object", description="Object label for display.")
+    mask_b64: str
 
 
 class PropagateRequest(BaseModel):
@@ -145,31 +217,55 @@ class PropagateRequest(BaseModel):
     end_frame_idx: int | None = None
 
 
+class ObjColorEntry(BaseModel):
+    """RGB colour for one object (0-255 per channel)."""
+    r: int
+    g: int
+    b: int
+
+
+class RenderMaskedVideoRequest(BaseModel):
+    video_name: str
+    alpha: float = Field(0.45, description="Mask overlay opacity (0–1).")
+    # obj_id → colour mapping; keys are strings because JSON keys are always strings
+    obj_colors: dict[str, ObjColorEntry] = Field(
+        default_factory=dict,
+        description="Per-object RGB colours. Key is obj_id as a string.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Internal helper
+# ---------------------------------------------------------------------------
+
 def _save_mask_and_respond(
-    mask: np.ndarray, video_name: str, frame_idx: int, obj_id: int
+    mask: np.ndarray, video_name: str, frame_idx: int, obj_id: int, obj_label: str
 ) -> dict:
-    """Persist the mask PNG and return the HTTP response dict."""
+    """
+    Save mask with label in filename.
+    Filename format: {frame_idx:05d}_{obj_id}_{sanitized_label}.png
+    """
     mdir = _mask_dir(video_name)
     os.makedirs(mdir, exist_ok=True)
-    fname = f"{frame_idx:05d}_{obj_id}.png"
+    safe_label = _sanitize_label(obj_label)
+    fname = f"{frame_idx:05d}_{obj_id}_{safe_label}.png"
     path = os.path.join(mdir, fname)
     Image.fromarray(mask).save(path)
     return {"mask_path": f"/storage/masks/{video_name}/{fname}"}
+
 
 # ---------------------------------------------------------------------------
 # Video management endpoints
 # ---------------------------------------------------------------------------
 
-
 @app.get("/videos", summary="List all stored video names")
 def list_videos():
-    """Return names of every video that has been uploaded."""
     names = [
-        f[:-4]  # strip .mp4
+        f[:-4]
         for f in os.listdir(VIDEO_DIR)
-        if f.endswith(".mp4")
+        if f.endswith(".mp4") and not f.endswith("_masked.mp4")
     ]
-    return {"videos": sorted(names)}
+    return {"videos": names}
 
 
 @app.get("/videos/{video_name}/stream", summary="Stream / download a stored video")
@@ -191,7 +287,6 @@ def video_info(video_name: str):
     frames = sorted(f for f in os.listdir(fd) if f.endswith(".jpg"))
     total_frames = len(frames)
 
-    # Re-read fps from the saved video file
     cap = cv2.VideoCapture(_video_path(video_name))
     fps = cap.get(cv2.CAP_PROP_FPS)
     cap.release()
@@ -202,21 +297,8 @@ def video_info(video_name: str):
 @app.post("/upload-video", summary="Upload a new video")
 async def upload_video(
     video: UploadFile = File(...),
-    name: str = Query(
-        "",
-        description="Optional custom name for the video (no extension). "
-        "A UUID is generated when left blank.",
-    ),
+    name: str = Query(""),
 ):
-    """
-    Upload an MP4 video.
-
-    * If *name* is provided and a video with that name already exists the
-      request is rejected (409 Conflict).
-    * If *name* is blank a UUID is generated automatically.
-    * Frames are extracted immediately and SAM-2 is initialised for the video.
-    """
-    # Determine and validate the name
     if name:
         video_name = _safe_video_name(name)
         if not video_name:
@@ -224,41 +306,29 @@ async def upload_video(
         if os.path.exists(_video_path(video_name)):
             raise HTTPException(
                 status_code=409,
-                detail=f"A video named '{video_name}' already exists. "
-                "Choose a different name or select the existing video.",
+                detail=f"Video '{video_name}' already exists. Delete it first or choose a different name.",
             )
     else:
-        video_name = str(uuid.uuid4())
+        video_name = _safe_video_name(video.filename or f"video_{uuid.uuid4().hex[:8]}")
 
     vpath = _video_path(video_name)
+    with open(vpath, "wb") as f:
+        f.write(await video.read())
+
     fdir = _frame_dir(video_name)
-
-    # Save the uploaded file
-    with open(vpath, "wb") as fh:
-        fh.write(await video.read())
-
-    # Extract frames
-    total_frames, fps = _extract_frames(vpath, fdir)
-    if total_frames == 0:
+    try:
+        total_frames, fps = _extract_frames(vpath, fdir)
+    except Exception:
         os.remove(vpath)
         raise HTTPException(status_code=422, detail="Could not extract frames from the video.")
 
-    # Initialise SAM-2 inference state
     sam2.init_video(video_name, fdir)
 
-    return {
-        "video_name": video_name,
-        "fps": fps,
-        "total_frames": total_frames,
-    }
+    return {"video_name": video_name, "fps": fps, "total_frames": total_frames}
 
 
 @app.post("/select-video", summary="Select an existing video and initialise SAM-2")
 def select_video(body: SelectVideoRequest):
-    """
-    Select a previously uploaded video.  This reinitialises the SAM-2
-    inference state so the user can start a fresh segmentation session.
-    """
     video_name = _safe_video_name(body.video_name)
     _require_video(video_name)
     _require_frames(video_name)
@@ -279,22 +349,13 @@ def select_video(body: SelectVideoRequest):
 # Segmentation endpoints
 # ---------------------------------------------------------------------------
 
-
-
 @app.post("/segment-frame/points", summary="Segment using point clicks and/or a bounding box")
 def segment_frame_points(req: SegmentPointsRequest):
-    """
-    Provide positive / negative point clicks and / or a bounding box to segment
-    an object on *frame_idx*.
-
-    At least one of *positive_points*, *negative_points*, or *box* must be supplied.
-    """
     if not req.positive_points and not req.negative_points and not req.box:
         raise HTTPException(
             status_code=400,
             detail="Supply at least one positive point, negative point, or box.",
         )
-
     try:
         mask = sam2.add_points_or_box(
             video_name=req.video_name,
@@ -307,15 +368,11 @@ def segment_frame_points(req: SegmentPointsRequest):
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    return _save_mask_and_respond(mask, req.video_name, req.frame_idx, req.obj_id)
+    return _save_mask_and_respond(mask, req.video_name, req.frame_idx, req.obj_id, req.obj_label)
 
 
 @app.post("/segment-frame/mask", summary="Segment using a binary mask prompt")
 def segment_frame_mask(req: SegmentMaskRequest):
-    """
-    Provide an existing binary mask (base-64 encoded image) as the prompt.
-    Non-zero pixels are treated as foreground.
-    """
     try:
         raw = base64.b64decode(req.mask_b64)
         img = Image.open(io.BytesIO(raw)).convert("L")
@@ -333,33 +390,29 @@ def segment_frame_mask(req: SegmentMaskRequest):
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    return _save_mask_and_respond(mask, req.video_name, req.frame_idx, req.obj_id)
+    return _save_mask_and_respond(mask, req.video_name, req.frame_idx, req.obj_id, req.obj_label)
 
 
-@app.post("/propagate", summary="Propagate segmentation masks through the entire video")
+@app.post("/propagate", summary="Propagate segmentation masks through the video")
 def propagate(req: PropagateRequest):
-    """
-    Propagate the current prompts through every frame of the video.
-
-    Masks are saved under:
-        storage/masks/<video_name>/<frame_idx:05d>_<obj_id>.png
-
-    Returns the masks folder path and total masks saved.
-    """
     video_name = _safe_video_name(req.video_name)
     _require_video(video_name)
 
     if req.end_frame_idx is not None and req.end_frame_idx < req.start_frame_idx:
-        raise HTTPException(status_code=400,detail="end_frame_idx must be >= start_frame_idx.")
+        raise HTTPException(status_code=400, detail="end_frame_idx must be >= start_frame_idx.")
 
     out_dir = _mask_dir(video_name)
-    print(req.start_frame_idx,req.end_frame_idx)
+    # Get existing labels from mask filenames
+    obj_labels = _get_object_labels_from_masks(video_name)
+    
+    print(req.start_frame_idx, req.end_frame_idx)
     try:
         total = sam2.propagate_and_save(
             video_name=video_name,
             out_dir=out_dir,
             start_frame_idx=req.start_frame_idx,
-            end_frame_idx=req.end_frame_idx
+            end_frame_idx=req.end_frame_idx,
+            obj_labels=obj_labels,  # Pass labels to SAM2Service
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -376,7 +429,6 @@ def propagate(req: PropagateRequest):
 # Frame / mask convenience endpoints
 # ---------------------------------------------------------------------------
 
-
 @app.get("/videos/{video_name}/frames/{frame_idx}", summary="Get a specific frame image")
 def get_frame(video_name: str, frame_idx: int):
     video_name = _safe_video_name(video_name)
@@ -386,10 +438,7 @@ def get_frame(video_name: str, frame_idx: int):
     return FileResponse(path, media_type="image/jpeg")
 
 
-@app.get(
-    "/videos/{video_name}/masks",
-    summary="List all saved mask filenames for a video",
-)
+@app.get("/videos/{video_name}/masks", summary="List all saved mask filenames for a video")
 def list_masks(video_name: str):
     video_name = _safe_video_name(video_name)
     mdir = _mask_dir(video_name)
@@ -400,6 +449,89 @@ def list_masks(video_name: str):
         "video_name": video_name,
         "masks": [f"/storage/masks/{video_name}/{f}" for f in files],
     }
+
+
+@app.get("/videos/{video_name}/objects", summary="Get object labels from mask filenames")
+def get_objects(video_name: str):
+    """
+    Extract and return object labels from mask filenames.
+    Response: { "objects": { "1": "Object_1", "2": "Person", ... } }
+    """
+    video_name = _safe_video_name(video_name)
+    labels_map = _get_object_labels_from_masks(video_name)
+    return {"objects": labels_map}
+
+
+@app.get(
+    "/videos/{video_name}/frames/{frame_idx}/polygons",
+    summary="Convert the saved mask for a frame+object into draggable polygon points",
+)
+def get_mask_polygons(video_name: str, frame_idx: int, obj_id: int = 1):
+    """
+    Reads the mask PNG saved for (video_name, frame_idx, obj_id) and returns
+    the outer contour(s) as a list of polygon point arrays.
+
+    Each polygon is a list of {x, y} objects in **video-pixel** coordinates,
+    already simplified with the Douglas-Peucker algorithm so the frontend
+    gets a manageable number of draggable vertices.
+
+    Response shape:
+        { "polygons": [ [ {"x": int, "y": int}, … ], … ] }
+    """
+    video_name = _safe_video_name(video_name)
+    mdir = _mask_dir(video_name)
+
+    if not os.path.isdir(mdir):
+        raise HTTPException(status_code=404, detail="No masks directory found for this video.")
+
+    # Find the mask file matching frame_idx and obj_id
+    prefix = f"{frame_idx:05d}_{obj_id}_"
+    mask_file = next(
+        (f for f in os.listdir(mdir) if f.startswith(prefix) and f.endswith(".png")),
+        None,
+    )
+    if mask_file is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No mask found for frame {frame_idx}, object {obj_id}. "
+                   "Run segmentation first.",
+        )
+
+    mask_path = os.path.join(mdir, mask_file)
+    mask_img = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+    if mask_img is None:
+        raise HTTPException(status_code=500, detail="Could not read mask file.")
+
+    # Threshold to binary
+    _, binary = cv2.threshold(mask_img, 127, 255, cv2.THRESH_BINARY)
+
+    # Optional: close small holes before contouring
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+
+    # Find external contours only
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_TC89_KCOS)
+
+    if not contours:
+        return {"polygons": []}
+
+    h, w = mask_img.shape[:2]
+    # Epsilon for Douglas-Peucker: ~0.5 % of the image diagonal gives good simplification
+    diag = (h ** 2 + w ** 2) ** 0.5
+    epsilon = 0.005 * diag
+
+    polygons: list[list[dict]] = []
+    for contour in contours:
+        # Skip tiny noise contours (< 50 px area)
+        if cv2.contourArea(contour) < 50:
+            continue
+        approx = cv2.approxPolyDP(contour, epsilon, closed=True)
+        # approx shape: (N, 1, 2)
+        pts = [{"x": int(pt[0][0]), "y": int(pt[0][1])} for pt in approx]
+        if len(pts) >= 3:
+            polygons.append(pts)
+
+    return {"polygons": polygons}
 
 
 @app.delete("/videos/{video_name}", summary="Delete a video and all associated data")
@@ -421,12 +553,8 @@ def delete_video(video_name: str):
 
 
 # ---------------------------------------------------------------------------
-# mask video render endpoint
+# Masked video render endpoint  (multi-object aware)
 # ---------------------------------------------------------------------------
-
-class RenderMaskedVideoRequest(BaseModel):
-    video_name: str
-    alpha: float = Field(0.45, description="Mask overlay opacity (0–1).")
 
 @app.post("/render-masked-video", summary="Composite masks onto video and render a new MP4")
 def render_masked_video(req: RenderMaskedVideoRequest):
@@ -440,6 +568,15 @@ def render_masked_video(req: RenderMaskedVideoRequest):
         raise HTTPException(status_code=404, detail="Frames not found.")
     if not os.path.isdir(mdir) or not os.listdir(mdir):
         raise HTTPException(status_code=404, detail="No masks found. Run propagation first.")
+
+    # Build int-keyed BGR palette from the request (colours arrive as RGB)
+    req_palette: dict[int, tuple[int, int, int]] = {}
+    for key, c in req.obj_colors.items():
+        try:
+            oid = int(key)
+            req_palette[oid] = (c.b, c.g, c.r)   # RGB → BGR for OpenCV
+        except ValueError:
+            pass
 
     cap = cv2.VideoCapture(_video_path(video_name))
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
@@ -472,7 +609,13 @@ def render_masked_video(req: RenderMaskedVideoRequest):
             detail="Could not initialise video encoder. No suitable codec found.",
         )
 
-    mask_color = np.array([29, 158, 117], dtype=np.uint8)  # BGR teal
+    # Collect all obj_ids present in the mask directory
+    all_obj_ids: set[int] = set()
+    for fname in os.listdir(mdir):
+        parsed = _parse_mask_filename(fname)
+        if parsed:
+            _, obj_id, _ = parsed
+            all_obj_ids.add(obj_id)
 
     for fname in frame_files:
         frame_idx = int(fname.replace(".jpg", ""))
@@ -480,22 +623,43 @@ def render_masked_video(req: RenderMaskedVideoRequest):
         if frame is None:
             continue
 
-        mask_path = os.path.join(mdir, f"{frame_idx:05d}_1.png")
-        if os.path.exists(mask_path):
-            mask_img = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
-            if mask_img is not None:
-                if mask_img.shape[:2] != (h, w):
-                    mask_img = cv2.resize(mask_img, (w, h), interpolation=cv2.INTER_NEAREST)
-                binary = mask_img > 127
-                overlay = frame.copy()
-                overlay[binary] = (
-                    frame[binary] * (1 - req.alpha) + mask_color * req.alpha
-                ).astype(np.uint8)
-                contours, _ = cv2.findContours(mask_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                cv2.drawContours(overlay, contours, -1, (29, 200, 117), 2)
-                frame = overlay
+        overlay = frame.copy()
 
-        writer.write(frame)
+        for obj_id in sorted(all_obj_ids):
+            # Find mask file for this frame and obj_id
+            # Pattern: {frame_idx:05d}_{obj_id}_*.png
+            mask_pattern = f"{frame_idx:05d}_{obj_id}_"
+            mask_file = None
+            for mf in os.listdir(mdir):
+                if mf.startswith(mask_pattern) and mf.endswith('.png'):
+                    mask_file = mf
+                    break
+            
+            if not mask_file:
+                continue
+
+            mask_path = os.path.join(mdir, mask_file)
+            mask_img = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+            if mask_img is None:
+                continue
+
+            if mask_img.shape[:2] != (h, w):
+                mask_img = cv2.resize(mask_img, (w, h), interpolation=cv2.INTER_NEAREST)
+
+            binary = mask_img > 127
+            color_bgr = _obj_color_bgr(obj_id, req_palette)
+            color_arr = np.array(color_bgr, dtype=np.uint8)
+
+            # Blend colour into the overlay (accumulate over objects)
+            overlay[binary] = (
+                overlay[binary] * (1 - req.alpha) + color_arr * req.alpha
+            ).astype(np.uint8)
+
+            # Draw contour
+            contours, _ = cv2.findContours(mask_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cv2.drawContours(overlay, contours, -1, color_bgr, 2)
+
+        writer.write(overlay)
 
     writer.release()
 

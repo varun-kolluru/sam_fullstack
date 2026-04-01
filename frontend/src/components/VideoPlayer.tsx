@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, useCallback } from 'react';
+import { useRef, useState, useEffect, useCallback, MutableRefObject } from 'react';
 import { Play, Pause } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
@@ -21,18 +21,39 @@ interface VideoPlayerProps {
   annotations: Annotations;
   onAnnotationsChange: (a: Annotations) => void;
   maskUrl: string | null;
+  /** Hex colour for the mask overlay of the current object, e.g. '#1d9e75' */
+  maskColor?: string;
   fps: number;
   onFrameIdxChange: (idx: number) => void;
   isPaused: boolean;
   onPausedChange: (paused: boolean) => void;
   clearSignal?: number;
   onVideoSizeChange?: (size: { w: number; h: number }) => void;
+  onCurrentTimeChange?: (t: number) => void;
+  seekToRef?: MutableRefObject<((seekFn: (t: number) => void) => void) | null>;
+  hidePrompts?: boolean;
+  /** Hex colour used for annotation overlays (points, boxes, polygons) */
+  activeObjectColor?: string;
 }
+
+/** Parse a hex colour (#rrggbb) into an rgba() CSS string with given alpha. */
+function hexToRgba(hex: string, alpha: number): string {
+  const clean = hex.replace('#', '');
+  const r = parseInt(clean.substring(0, 2), 16);
+  const g = parseInt(clean.substring(2, 4), 16);
+  const b = parseInt(clean.substring(4, 6), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+const DEFAULT_COLOR = '#1d9e75';
 
 const VideoPlayer = ({
   videoUrl, activeTool, annotations, onAnnotationsChange,
-  maskUrl, fps, onFrameIdxChange,
+  maskUrl, maskColor = DEFAULT_COLOR,
+  fps, onFrameIdxChange, onCurrentTimeChange,
   isPaused, onPausedChange, clearSignal, onVideoSizeChange,
+  seekToRef, hidePrompts = false,
+  activeObjectColor = DEFAULT_COLOR,
 }: VideoPlayerProps) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -44,15 +65,24 @@ const VideoPlayer = ({
   const [currentPolygon, setCurrentPolygon] = useState<Point[]>([]);
   const [maskImage, setMaskImage] = useState<HTMLImageElement | null>(null);
 
-  // Clear in-progress polygon when clearSignal changes
+  // Drag-to-edit polygon vertices
+  const dragRef = useRef<{ polyIdx: number; ptIdx: number } | null>(null);
+  const [isDraggingVertex, setIsDraggingVertex] = useState(false);
+  // Hover state for cursor feedback
+  const [hoveringVertex, setHoveringVertex] = useState(false);
+
   useEffect(() => {
-    if (clearSignal) {
-      setCurrentPolygon([]);
-      setDrawingBox(null);
-    }
+    if (clearSignal) { setCurrentPolygon([]); setDrawingBox(null); }
   }, [clearSignal]);
 
-  // Load single-frame mask overlay (used after segmentation, shown while paused)
+  useEffect(() => {
+    if ((annotations as any).__undoPolygonPoint) {
+      setCurrentPolygon(prev => prev.length > 0 ? prev.slice(0, -1) : prev);
+      const { __undoPolygonPoint, ...clean } = annotations as any;
+      onAnnotationsChange(clean as Annotations);
+    }
+  }, [annotations, onAnnotationsChange]);
+
   useEffect(() => {
     if (!maskUrl) { setMaskImage(null); return; }
     const img = new Image();
@@ -90,6 +120,21 @@ const VideoPlayer = ({
     return { x: vx * rect.scale + rect.offsetX, y: vy * rect.scale + rect.offsetY };
   }, [getDisplayRect]);
 
+  /** Returns { polyIdx, ptIdx } of the nearest polygon vertex within `threshold` canvas px, or null. */
+  const hitTestVertex = useCallback((cx: number, cy: number, threshold = 10): { polyIdx: number; ptIdx: number } | null => {
+    let best: { polyIdx: number; ptIdx: number } | null = null;
+    let bestDist = threshold;
+    annotations.polygons.forEach((poly, polyIdx) => {
+      poly.forEach((pt, ptIdx) => {
+        const cp = videoToCanvas(pt.x, pt.y);
+        if (!cp) return;
+        const d = Math.hypot(cx - cp.x, cy - cp.y);
+        if (d < bestDist) { bestDist = d; best = { polyIdx, ptIdx }; }
+      });
+    });
+    return best;
+  }, [annotations.polygons, videoToCanvas]);
+
   const drawCanvas = useCallback(() => {
     const canvas = canvasRef.current;
     const container = containerRef.current;
@@ -102,22 +147,27 @@ const VideoPlayer = ({
     const rect = getDisplayRect();
     if (!rect) return;
 
-    // Single-frame mask overlay (only meaningful while paused on the segmented frame)
+    // Mask overlay (paused frame only)
     if (maskImage && isPaused) {
       ctx.globalAlpha = 0.35;
       ctx.drawImage(maskImage, rect.offsetX, rect.offsetY, rect.dw, rect.dh);
       ctx.globalAlpha = 1;
     }
 
-    // Positive points
+    if (hidePrompts) return;
+
+    const solidColor = activeObjectColor;
+    const lightColor = hexToRgba(activeObjectColor, 0.25);
+
+    // Positive points — object colour
     annotations.positivePoints.forEach(p => {
       const cp = videoToCanvas(p.x, p.y);
       if (!cp) return;
       ctx.beginPath();
       ctx.arc(cp.x, cp.y, 6, 0, Math.PI * 2);
-      ctx.fillStyle = 'hsl(142 70% 42%)';
+      ctx.fillStyle = solidColor;
       ctx.fill();
-      ctx.strokeStyle = 'hsl(142 70% 55%)';
+      ctx.strokeStyle = hexToRgba(activeObjectColor, 0.7);
       ctx.lineWidth = 2;
       ctx.stroke();
       ctx.beginPath();
@@ -128,7 +178,7 @@ const VideoPlayer = ({
       ctx.stroke();
     });
 
-    // Negative points
+    // Negative points — always red
     annotations.negativePoints.forEach(p => {
       const cp = videoToCanvas(p.x, p.y);
       if (!cp) return;
@@ -151,7 +201,7 @@ const VideoPlayer = ({
       const tl = videoToCanvas(box.x1, box.y1);
       const br = videoToCanvas(box.x2, box.y2);
       if (!tl || !br) return;
-      ctx.strokeStyle = 'hsl(142 70% 50%)';
+      ctx.strokeStyle = solidColor;
       ctx.lineWidth = 2;
       ctx.setLineDash([6, 3]);
       ctx.strokeRect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
@@ -159,7 +209,7 @@ const VideoPlayer = ({
     });
 
     // Completed polygons
-    annotations.polygons.forEach(poly => {
+    annotations.polygons.forEach((poly, polyIdx) => {
       if (poly.length < 2) return;
       ctx.beginPath();
       const first = videoToCanvas(poly[0].x, poly[0].y);
@@ -170,11 +220,34 @@ const VideoPlayer = ({
         if (p) ctx.lineTo(p.x, p.y);
       }
       ctx.closePath();
-      ctx.strokeStyle = 'hsl(142 70% 50%)';
+      ctx.strokeStyle = solidColor;
       ctx.lineWidth = 2;
       ctx.stroke();
-      ctx.fillStyle = 'hsla(142, 70%, 50%, 0.1)';
+      ctx.fillStyle = lightColor;
       ctx.fill();
+
+      // Render draggable vertex handles when polygon tool is active
+      if (activeTool === 'polygon') {
+        poly.forEach((pt, ptIdx) => {
+          const cp = videoToCanvas(pt.x, pt.y);
+          if (!cp) return;
+          const isDragging =
+            dragRef.current?.polyIdx === polyIdx && dragRef.current?.ptIdx === ptIdx;
+          // Outer ring
+          ctx.beginPath();
+          ctx.arc(cp.x, cp.y, isDragging ? 9 : 7, 0, Math.PI * 2);
+          ctx.fillStyle = isDragging ? solidColor : hexToRgba(activeObjectColor, 0.85);
+          ctx.fill();
+          ctx.strokeStyle = '#fff';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+          // Inner dot
+          ctx.beginPath();
+          ctx.arc(cp.x, cp.y, 3, 0, Math.PI * 2);
+          ctx.fillStyle = '#fff';
+          ctx.fill();
+        });
+      }
     });
 
     // In-progress box
@@ -182,7 +255,7 @@ const VideoPlayer = ({
       const s = videoToCanvas(drawingBox.start.x, drawingBox.start.y);
       const c = videoToCanvas(drawingBox.current.x, drawingBox.current.y);
       if (s && c) {
-        ctx.strokeStyle = 'hsl(185 70% 50%)';
+        ctx.strokeStyle = hexToRgba(activeObjectColor, 0.8);
         ctx.lineWidth = 2;
         ctx.setLineDash([4, 4]);
         ctx.strokeRect(s.x, s.y, c.x - s.x, c.y - s.y);
@@ -200,7 +273,7 @@ const VideoPlayer = ({
           const p = videoToCanvas(currentPolygon[i].x, currentPolygon[i].y);
           if (p) ctx.lineTo(p.x, p.y);
         }
-        ctx.strokeStyle = 'hsl(142 70% 50%)';
+        ctx.strokeStyle = solidColor;
         ctx.lineWidth = 2;
         ctx.setLineDash([4, 4]);
         ctx.stroke();
@@ -210,16 +283,15 @@ const VideoPlayer = ({
           if (!p) return;
           ctx.beginPath();
           ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
-          ctx.fillStyle = 'hsl(142 70% 50%)';
+          ctx.fillStyle = solidColor;
           ctx.fill();
         });
       }
     }
-  }, [annotations, drawingBox, currentPolygon, maskImage, isPaused, videoToCanvas, getDisplayRect]);
+  }, [annotations, drawingBox, currentPolygon, maskImage, isPaused, videoToCanvas, getDisplayRect, hidePrompts, activeObjectColor]);
 
   useEffect(() => { drawCanvas(); }, [drawCanvas]);
 
-  // Frame index sync during playback
   useEffect(() => {
     if (isPaused) return;
     const video = videoRef.current;
@@ -230,7 +302,6 @@ const VideoPlayer = ({
     return () => clearInterval(interval);
   }, [isPaused, fps, onFrameIdxChange]);
 
-  // Resize observer
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -239,6 +310,26 @@ const VideoPlayer = ({
     return () => ro.disconnect();
   }, [drawCanvas]);
 
+  const seekVideo = useCallback((time: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.currentTime = time;
+  }, []);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const onSeeked = () => {
+      const t = video.currentTime;
+      setCurrentTime(t);
+      onCurrentTimeChange?.(t);
+      onFrameIdxChange(Math.floor(t * (fps || 30)));
+      drawCanvas();
+    };
+    video.addEventListener('seeked', onSeeked);
+    return () => video.removeEventListener('seeked', onSeeked);
+  }, [fps, onFrameIdxChange, drawCanvas]);
+
   const togglePlay = () => {
     const video = videoRef.current;
     if (!video) return;
@@ -246,14 +337,7 @@ const VideoPlayer = ({
     else { video.pause(); onPausedChange(true); }
   };
 
-  const handleSeek = (value: number[]) => {
-    const video = videoRef.current;
-    if (!video) return;
-    video.currentTime = value[0];
-    setCurrentTime(value[0]);
-    onFrameIdxChange(Math.floor(value[0] * (fps || 30)));
-    drawCanvas();
-  };
+  const handleSeek = (value: number[]) => seekVideo(value[0]);
 
   const getCanvasCoords = (e: React.MouseEvent) => {
     const canvas = canvasRef.current;
@@ -264,8 +348,12 @@ const VideoPlayer = ({
 
   const handleCanvasClick = (e: React.MouseEvent) => {
     if (!isPaused || activeTool === 'none') return;
+    // Ignore click if we just finished dragging a vertex
+    if (dragRef.current !== null) return;
     const coords = getCanvasCoords(e);
     if (!coords) return;
+    // In polygon mode, don't add a point if the click was on an existing vertex
+    if (activeTool === 'polygon' && hitTestVertex(coords.cx, coords.cy)) return;
     const vp = canvasToVideo(coords.cx, coords.cy);
     if (!vp) return;
     if (activeTool === 'positive') {
@@ -285,24 +373,67 @@ const VideoPlayer = ({
   };
 
   const handleMouseDown = (e: React.MouseEvent) => {
-    if (!isPaused || activeTool !== 'box') return;
+    if (!isPaused) return;
     const coords = getCanvasCoords(e);
     if (!coords) return;
+
+    // Polygon tool: check if clicking near an existing vertex → drag it
+    if (activeTool === 'polygon' && annotations.polygons.length > 0) {
+      const hit = hitTestVertex(coords.cx, coords.cy);
+      if (hit) {
+        dragRef.current = hit;
+        setIsDraggingVertex(true);
+        return; // Don't fall through to box logic
+      }
+    }
+
+    if (activeTool !== 'box') return;
     const vp = canvasToVideo(coords.cx, coords.cy);
     if (!vp) return;
     setDrawingBox({ start: vp, current: vp });
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
-    if (!drawingBox) return;
     const coords = getCanvasCoords(e);
     if (!coords) return;
+
+    // Dragging a polygon vertex
+    if (isDraggingVertex && dragRef.current) {
+      const vp = canvasToVideo(coords.cx, coords.cy);
+      if (!vp) return;
+      const { polyIdx, ptIdx } = dragRef.current;
+      const updatedPolygons = annotations.polygons.map((poly, pi) =>
+        pi === polyIdx
+          ? poly.map((pt, ti) => (ti === ptIdx ? vp : pt))
+          : poly,
+      );
+      onAnnotationsChange({ ...annotations, polygons: updatedPolygons });
+      return;
+    }
+
+    // Hover detection for cursor feedback (polygon tool only)
+    if (activeTool === 'polygon' && isPaused) {
+      const hit = hitTestVertex(coords.cx, coords.cy);
+      setHoveringVertex(hit !== null);
+    } else {
+      setHoveringVertex(false);
+    }
+
+    // Box drawing
+    if (!drawingBox) return;
     const vp = canvasToVideo(coords.cx, coords.cy);
     if (!vp) return;
     setDrawingBox(prev => prev ? { ...prev, current: vp } : null);
   };
 
   const handleMouseUp = () => {
+    // End vertex drag
+    if (isDraggingVertex) {
+      dragRef.current = null;
+      setIsDraggingVertex(false);
+      return;
+    }
+
     if (!drawingBox) return;
     const { start, current } = drawingBox;
     const x1 = Math.min(start.x, current.x);
@@ -321,7 +452,12 @@ const VideoPlayer = ({
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const cursorClass = isPaused && activeTool !== 'none' ? 'cursor-crosshair' : 'cursor-default';
+  const cursorClass = (() => {
+    if (!isPaused || activeTool === 'none') return 'cursor-default';
+    if (isDraggingVertex) return 'cursor-grabbing';
+    if (activeTool === 'polygon' && hoveringVertex) return 'cursor-grab';
+    return 'cursor-crosshair';
+  })();
 
   return (
     <div className="flex flex-col gap-3">
@@ -341,10 +477,16 @@ const VideoPlayer = ({
             onVideoSizeChange?.(size);
             v.pause();
             onPausedChange(true);
+            if (seekToRef?.current) {
+              const cb = seekToRef.current;
+              seekToRef.current = null;
+              cb(seekVideo);
+            }
           }}
           onTimeUpdate={(e) => {
             const t = e.currentTarget.currentTime;
             setCurrentTime(t);
+            onCurrentTimeChange?.(t);
             onFrameIdxChange(Math.floor(t * (fps || 30)));
           }}
           onPause={() => onPausedChange(true)}
@@ -359,6 +501,13 @@ const VideoPlayer = ({
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
+          onMouseLeave={() => {
+            setHoveringVertex(false);
+            if (isDraggingVertex) {
+              dragRef.current = null;
+              setIsDraggingVertex(false);
+            }
+          }}
         />
       </div>
 
