@@ -305,7 +305,7 @@ const Workspace = () => {
       const progressInterval = setInterval(() => {
         setTrackingProgress(prev => Math.min(prev + Math.random() * 8, 90));
       }, 600);
-      const result = await propagate(videoName, frameIdx, null);
+      const result = await propagate(videoName, frameIdx, frameIdx + 200);
       clearInterval(progressInterval);
       setTrackingProgress(100);
       setStatus('tracked');
