@@ -14,25 +14,21 @@ interface VideoSelectorProps {
 }
 
 const VideoSelector = ({
-  onSelectExisting,
-  onUploadNew,
-  uploadProgress,
-  isUploading,
-  isSelecting,
+  onSelectExisting, onUploadNew, uploadProgress, isUploading, isSelecting,
 }: VideoSelectorProps) => {
   const [videos, setVideos] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [isDragging, setIsDragging] = useState(false);
   const [uploadName, setUploadName] = useState('');
+  const [isDragging, setIsDragging] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const fetchVideos = useCallback(async () => {
     setLoading(true);
     setError(false);
     try {
-      const list = await listVideos();
-      setVideos(list.videos);
+      const { videos } = await listVideos();
+      setVideos(videos);
     } catch {
       setError(true);
     } finally {
@@ -40,28 +36,21 @@ const VideoSelector = ({
     }
   }, []);
 
-  useEffect(() => {
-    fetchVideos();
-  }, [fetchVideos]);
+  useEffect(() => { fetchVideos(); }, [fetchVideos]);
 
-  const handleFile = useCallback(
-    (file: File) => {
-      if (!file.type.startsWith('video/')) return;
+  const handleFile = useCallback((file: File) => {
+    if (file.type.startsWith('video/')) {
       const name = uploadName.trim() || file.name.replace(/\.[^.]+$/, '');
       onUploadNew(file, name);
-    },
-    [onUploadNew, uploadName]
-  );
+    }
+  }, [onUploadNew, uploadName]);
 
-  const handleDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault();
-      setIsDragging(false);
-      const file = e.dataTransfer.files[0];
-      if (file) handleFile(file);
-    },
-    [handleFile]
-  );
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files[0];
+    if (file) handleFile(file);
+  }, [handleFile]);
 
   if (isUploading) {
     return (
@@ -85,24 +74,19 @@ const VideoSelector = ({
     <div className="w-full max-w-2xl mx-auto flex flex-col gap-8">
       {/* Upload Section */}
       <div className="flex flex-col gap-3">
-        <div className="flex items-center gap-3">
-          <Input
-            placeholder="Video name (optional, defaults to filename)"
-            value={uploadName}
-            onChange={(e) => setUploadName(e.target.value)}
-            className="flex-1"
-          />
-        </div>
+        <Input
+          placeholder="Video name (optional, defaults to filename)"
+          value={uploadName}
+          onChange={(e) => setUploadName(e.target.value)}
+          className="flex-1"
+        />
         <div
           className={`flex flex-col items-center gap-5 p-12 rounded-xl border-2 border-dashed transition-all duration-300 cursor-pointer ${
             isDragging
               ? 'border-primary bg-primary/5 shadow-[0_0_30px_hsl(var(--primary)/0.15)]'
               : 'border-border bg-card/50 hover:border-primary/50 hover:bg-card'
           }`}
-          onDragOver={(e) => {
-            e.preventDefault();
-            setIsDragging(true);
-          }}
+          onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
           onDragLeave={() => setIsDragging(false)}
           onDrop={handleDrop}
           onClick={() => inputRef.current?.click()}
@@ -145,8 +129,7 @@ const VideoSelector = ({
             <span className="text-sm font-medium text-foreground">Server Videos</span>
           </div>
           <Button
-            variant="ghost"
-            size="sm"
+            variant="ghost" size="sm"
             onClick={fetchVideos}
             disabled={loading}
             className="text-muted-foreground"
@@ -155,22 +138,13 @@ const VideoSelector = ({
           </Button>
         </div>
 
-        {loading && (
-          <p className="text-sm text-muted-foreground text-center py-6">Loading videos…</p>
-        )}
-
-        {error && (
-          <p className="text-sm text-destructive text-center py-6">
-            Could not connect to server.
-          </p>
-        )}
-
+        {loading && <p className="text-sm text-muted-foreground text-center py-6">Loading videos…</p>}
+        {error && <p className="text-sm text-destructive text-center py-6">Could not connect to server.</p>}
         {!loading && !error && videos.length === 0 && (
           <p className="text-sm text-muted-foreground text-center py-6">
             No videos on the server yet. Upload one above.
           </p>
         )}
-
         {!loading && !error && videos.length > 0 && (
           <div className="grid gap-2 max-h-64 overflow-y-auto pr-1">
             {videos.map((name) => (

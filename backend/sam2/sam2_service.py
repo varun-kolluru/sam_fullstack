@@ -20,18 +20,11 @@ class SAM2Service:
         self.device = "cuda" if torch.cuda.is_available() else "mps"
         self.cfg = cfg
         self.ckpt = ckpt
-
-        # One predictor is shared across all videos (stateless model weights).
-        # Inference state is per-video and held in self.states.
         self._predictor = None
         self.states: dict[str, object] = {}
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
     def _get_predictor(self):
-        """Lazily build and cache the SAM-2 predictor (model weights only)."""
+        """Lazily build and cache the SAM-2 predictor."""
         if self._predictor is None:
             self._predictor = build_sam2_video_predictor(
                 config_file=self.cfg,
@@ -43,29 +36,16 @@ class SAM2Service:
 
     @staticmethod
     def _logits_to_uint8(logit_tensor: torch.Tensor) -> np.ndarray:
-        """Convert a raw logit tensor (C, H, W) or (H, W) to a uint8 mask."""
+        """Convert logit tensor to uint8 mask."""
         mask = (logit_tensor > 0).cpu().numpy().astype("uint8") * 255
         return np.squeeze(mask)
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     def init_video(self, video_name: str, frame_dir: str) -> None:
-        """
-        Initialise (or re-initialise) the inference state for *video_name*.
-
-        Parameters
-        ----------
-        video_name : unique identifier / folder name for the video
-        frame_dir  : directory that contains JPEG frames (00000.jpg, …)
-        """
+        """Initialize inference state for video."""
         predictor = self._get_predictor()
-
         with torch.inference_mode():
             state = predictor.init_state(video_path=frame_dir)
             predictor.reset_state(state)
-
         self.states[video_name] = state
 
     def _require_state(self, video_name: str):
@@ -75,9 +55,7 @@ class SAM2Service:
             )
         return self.states[video_name]
 
-    # ---- point / box prompt ----------------------------------------
-
-    def add_points_or_box(
+    def add_prompts(
         self,
         video_name: str,
         frame_idx: int,
@@ -85,103 +63,57 @@ class SAM2Service:
         pos_points: list[list[int]] | None = None,
         neg_points: list[list[int]] | None = None,
         box: list[int] | None = None,
+        binary_mask: np.ndarray | None = None,
     ) -> np.ndarray:
-        """
-        Add point clicks and / or a bounding box for *obj_id* on *frame_idx*.
-
-        Parameters
-        ----------
-        pos_points : [[x, y], …]  positive clicks
-        neg_points : [[x, y], …]  negative clicks
-        box        : [x_min, y_min, x_max, y_max]
-
-        Returns
-        -------
-        uint8 mask array (H, W), values 0 or 255
-        """
+        """Add any combination of prompts: mask, points, and/or box for object."""
         state = self._require_state(video_name)
         predictor = self._get_predictor()
 
         with torch.inference_mode():
-            predictor.reset_state(state)
+            if obj_id not in state["obj_id_to_idx"]:
+                pass
+                #predictor.reset_state(state)
+            else:
+                predictor.reset_state_for_objectId(state, obj_id)
+        
+        # First, add mask if provided
+        if binary_mask is not None:
+            print("mask also present")
+            with torch.inference_mode():
+                _, out_obj_ids, out_mask_logits = predictor.add_new_mask(
+                    inference_state=state,
+                    frame_idx=frame_idx,
+                    obj_id=obj_id,
+                    mask=binary_mask.astype(bool),
+                )
+        
+        # Then, add points/box if provided (to refine the mask)
+        has_points = (pos_points and len(pos_points) > 0) or (neg_points and len(neg_points) > 0)
+        has_box = box is not None
+        
+        if has_points or has_box:
+            # Build points/labels arrays
+            all_points, all_labels = [], []
+            if pos_points:
+                all_points.extend(pos_points)
+                all_labels.extend([1] * len(pos_points))
+            if neg_points:
+                all_points.extend(neg_points)
+                all_labels.extend([0] * len(neg_points))
 
-        # --- build points / labels arrays ---
-        all_points = []
-        all_labels = []
+            kwargs = dict(inference_state=state, frame_idx=frame_idx, obj_id=obj_id)
+            if all_points:
+                kwargs["points"] = np.array(all_points, dtype=np.float32)
+                kwargs["labels"] = np.array(all_labels, dtype=np.int32)
+            if box:
+                kwargs["box"] = np.array(box, dtype=np.float32)
 
-        if pos_points:
-            all_points.extend(pos_points)
-            all_labels.extend([1] * len(pos_points))
-
-        if neg_points:
-            all_points.extend(neg_points)
-            all_labels.extend([0] * len(neg_points))
-
-        np_points = np.array(all_points, dtype=np.float32) if all_points else None
-        np_labels = np.array(all_labels, dtype=np.int32) if all_labels else None
-
-        # --- build box array ---
-        np_box = np.array(box, dtype=np.float32) if box else None
-
-        kwargs: dict = dict(
-            inference_state=state,
-            frame_idx=frame_idx,
-            obj_id=obj_id,
-        )
-        if np_points is not None:
-            kwargs["points"] = np_points
-            kwargs["labels"] = np_labels
-        if np_box is not None:
-            kwargs["box"] = np_box
-
-        with torch.inference_mode():
-            _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(**kwargs)
-
-        # Return the mask for the first (and usually only) returned object
+            with torch.inference_mode():
+                _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(**kwargs)
+        
+        # If only mask was provided, out_obj_ids and out_mask_logits are already set
         obj_index = out_obj_ids.index(obj_id) if obj_id in out_obj_ids else 0
         return self._logits_to_uint8(out_mask_logits[obj_index])
-
-    # ---- binary mask prompt ----------------------------------------
-
-    def add_mask(
-        self,
-        video_name: str,
-        frame_idx: int,
-        obj_id: int,
-        binary_mask: np.ndarray,
-    ) -> np.ndarray:
-        """
-        Add a binary mask prompt for *obj_id* on *frame_idx*.
-
-        Parameters
-        ----------
-        binary_mask : bool / uint8 array of shape (H, W)
-
-        Returns
-        -------
-        uint8 mask array (H, W), values 0 or 255
-        """
-        state = self._require_state(video_name)
-        predictor = self._get_predictor()
-
-        with torch.inference_mode():
-            predictor.reset_state(state)
-
-        # SAM-2 expects a boolean mask
-        bool_mask = binary_mask.astype(bool)
-
-        with torch.inference_mode():
-            _, out_obj_ids, out_mask_logits = predictor.add_new_mask(
-                inference_state=state,
-                frame_idx=frame_idx,
-                obj_id=obj_id,
-                mask=bool_mask,
-            )
-
-        obj_index = out_obj_ids.index(obj_id) if obj_id in out_obj_ids else 0
-        return self._logits_to_uint8(out_mask_logits[obj_index])
-
-    # ---- propagation -----------------------------------------------
 
     def propagate_and_save(
         self,
@@ -191,34 +123,17 @@ class SAM2Service:
         end_frame_idx: int | None = None,
         obj_labels: dict[str, str] | None = None,
     ) -> int:
-        """
-        Propagate the current prompts through the video and save per-frame masks.
-
-        Parameters
-        ----------
-        start_frame_idx : frame to begin propagation from (default 0)
-        end_frame_idx   : last frame to include, inclusive (default = all frames)
-        obj_labels      : dict mapping obj_id (as string) -> label
-
-        Returns
-        -------
-        Number of mask frames saved.
-        """
+        """Propagate prompts through video and save per-frame masks."""
         state = self._require_state(video_name)
         predictor = self._get_predictor()
-
         os.makedirs(out_dir, exist_ok=True)
-        saved = 0
-
-        # Default labels if not provided
-        if obj_labels is None:
-            obj_labels = {}
-
-        # Calculate max_frame_num_to_track from the range
+        
+        obj_labels = obj_labels or {}
         max_frame_num_to_track = None
         if end_frame_idx is not None:
             max_frame_num_to_track = end_frame_idx - start_frame_idx
 
+        saved = 0
         with torch.inference_mode():
             for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(
                 state,
@@ -227,18 +142,13 @@ class SAM2Service:
             ):
                 for i, out_obj_id in enumerate(out_obj_ids):
                     mask = self._logits_to_uint8(out_mask_logits[i])
-                    
-                    # Get label for this object, default to "Object {id}"
                     label = obj_labels.get(str(out_obj_id), f"Object_{out_obj_id}")
                     safe_label = _sanitize_label(label)
-                    
-                    # Save with format: frameidx_objid_label.png
                     path = os.path.join(out_dir, f"{out_frame_idx:05d}_{out_obj_id}_{safe_label}.png")
                     Image.fromarray(mask).save(path)
                     saved += 1
-
         return saved
 
     def clear_video(self, video_name: str) -> None:
-        """Remove the inference state for *video_name* to free GPU memory."""
+        """Remove inference state to free GPU memory."""
         self.states.pop(video_name, None)

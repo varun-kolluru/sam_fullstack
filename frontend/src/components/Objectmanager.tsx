@@ -1,23 +1,12 @@
-/**
- * ObjectManager.tsx
- * Panel that lets users create, rename, select and remove tracked objects.
- * Each object gets a unique colour and maps to a SAM-2 obj_id.
- */
-
 import { useState, useRef, useEffect } from 'react';
 import { Plus, Pencil, Trash2, Check, X, CheckCircle2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 
 export interface TrackedObject {
-  id: number;           // SAM-2 obj_id (1-based integer)
-  label: string;        // user-visible name
-  color: {              // display colour
-    hex: string;        // e.g. '#1d9e75'
-    r: number;
-    g: number;
-    b: number;
-  };
+  id: number;
+  label: string;
+  color: { hex: string; r: number; g: number; b: number; };
 }
 
 interface ObjectManagerProps {
@@ -41,31 +30,20 @@ const ObjectManager = ({
   const addInputRef = useRef<HTMLInputElement>(null);
   const editInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    if (adding) addInputRef.current?.focus();
-  }, [adding]);
-
-  useEffect(() => {
-    if (editingId !== null) editInputRef.current?.focus();
-  }, [editingId]);
+  useEffect(() => { if (adding) addInputRef.current?.focus(); }, [adding]);
+  useEffect(() => { if (editingId !== null) editInputRef.current?.focus(); }, [editingId]);
 
   const commitAdd = () => {
-    const label = newLabel.trim() || `Object ${objects.length + 1}`;
-    onAdd(label);
+    onAdd(newLabel.trim() || `Object ${objects.length + 1}`);
     setNewLabel('');
     setAdding(false);
   };
 
   const commitRename = () => {
-    if (editingId === null) return;
-    const label = editLabel.trim();
-    if (label) onRename(editingId, label);
+    if (editingId !== null && editLabel.trim()) {
+      onRename(editingId, editLabel.trim());
+    }
     setEditingId(null);
-  };
-
-  const startEdit = (obj: TrackedObject) => {
-    setEditingId(obj.id);
-    setEditLabel(obj.label);
   };
 
   return (
@@ -82,22 +60,17 @@ const ObjectManager = ({
           <div
             key={obj.id}
             onClick={() => { if (editingId !== obj.id) onSelect(obj.id); }}
-            className={`
-              flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border cursor-pointer
-              transition-all duration-150 select-none
-              ${isActive
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border cursor-pointer transition-all duration-150 select-none ${
+              isActive
                 ? 'border-primary bg-primary/10 shadow-sm'
                 : 'border-border hover:border-border/80 hover:bg-muted/40'
-              }
-            `}
+            }`}
           >
-            {/* Colour swatch */}
             <span
               className="w-3 h-3 rounded-full shrink-0 ring-1 ring-black/10"
               style={{ backgroundColor: obj.color.hex }}
             />
 
-            {/* Label / rename input */}
             {editingId === obj.id ? (
               <Input
                 ref={editInputRef}
@@ -116,16 +89,14 @@ const ObjectManager = ({
               </span>
             )}
 
-            {/* Segmented badge */}
             {isSegmented && editingId !== obj.id && (
               <CheckCircle2 className="h-3 w-3 text-green-500 shrink-0" />
             )}
 
-            {/* Action buttons — shown on active object */}
             {isActive && editingId !== obj.id && (
               <div className="flex items-center gap-0.5 ml-0.5" onClick={e => e.stopPropagation()}>
                 <button
-                  onClick={() => startEdit(obj)}
+                  onClick={() => { setEditingId(obj.id); setEditLabel(obj.label); }}
                   className="text-muted-foreground hover:text-foreground p-0.5 rounded"
                   title="Rename"
                 >
@@ -143,7 +114,6 @@ const ObjectManager = ({
               </div>
             )}
 
-            {/* Confirm / cancel rename */}
             {editingId === obj.id && (
               <div className="flex items-center gap-0.5 ml-0.5" onClick={e => e.stopPropagation()}>
                 <button onClick={commitRename} className="text-green-500 hover:text-green-400 p-0.5 rounded">
@@ -158,7 +128,6 @@ const ObjectManager = ({
         );
       })}
 
-      {/* Add new object */}
       {adding ? (
         <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-dashed border-primary/60 bg-primary/5">
           <Input
@@ -181,8 +150,7 @@ const ObjectManager = ({
         </div>
       ) : (
         <Button
-          variant="ghost"
-          size="sm"
+          variant="ghost" size="sm"
           onClick={() => setAdding(true)}
           className="h-7 gap-1 text-xs text-muted-foreground border border-dashed border-border hover:border-primary/50 hover:text-primary"
         >

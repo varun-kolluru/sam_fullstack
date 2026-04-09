@@ -1,14 +1,6 @@
-/**
- * api.ts  –  updated to send obj_label in segmentation requests
- */
-
 export const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000';
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-
 export interface ObjColorEntry { r: number; g: number; b: number; }
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
 
 async function handleResponse<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -17,47 +9,43 @@ async function handleResponse<T>(res: Response): Promise<T> {
     try { message = JSON.parse(text).detail ?? text; } catch { /* ignore */ }
     throw new Error(message);
   }
-  return res.json() as Promise<T>;
+  return res.json();
 }
 
-// ── Video management ──────────────────────────────────────────────────────────
-
+// ── Video management ────────────────────────────────────────────────────────
 export function getVideoStreamUrl(videoName: string): string {
   return `${API_BASE}/videos/${encodeURIComponent(videoName)}/stream`;
 }
 
 export async function listVideos(): Promise<{ videos: string[] }> {
-  const res = await fetch(`${API_BASE}/videos`);
-  return handleResponse(res);
+  return handleResponse(await fetch(`${API_BASE}/videos`));
 }
 
-export async function selectVideo(
-  videoName: string,
-): Promise<{ video_name: string; fps: number; total_frames: number }> {
-  const res = await fetch(`${API_BASE}/select-video`, {
+export async function selectVideo(videoName: string) {
+  return handleResponse(await fetch(`${API_BASE}/select-video`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ video_name: videoName }),
-  });
-  return handleResponse(res);
+  }));
 }
 
 export async function uploadVideo(
   file: File,
   name: string,
   onProgress?: (pct: number) => void,
-): Promise<{ video_name: string; fps: number; total_frames: number }> {
+) {
   return new Promise((resolve, reject) => {
     const fd = new FormData();
     fd.append('video', file);
-    const url = `${API_BASE}/upload-video?name=${encodeURIComponent(name)}`;
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', url);
+    xhr.open('POST', `${API_BASE}/upload-video?name=${encodeURIComponent(name)}`);
+    
     if (onProgress) {
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
       };
     }
+    
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) {
         resolve(JSON.parse(xhr.responseText));
@@ -67,53 +55,36 @@ export async function uploadVideo(
         reject(new Error(msg));
       }
     };
+    
     xhr.onerror = () => reject(new Error('Network error during upload'));
     xhr.send(fd);
   });
 }
 
-// ── Segmentation ──────────────────────────────────────────────────────────────
-
-export async function segmentFramePoints(body: {
+// ── Segmentation ────────────────────────────────────────────────────────────
+export async function segmentFrame(body: {
   video_name: string;
   frame_idx: number;
   obj_id: number;
   obj_label: string;
-  positive_points: number[][];
-  negative_points: number[][];
-  box: number[] | null;
-}): Promise<{ mask_path: string }> {
-  const res = await fetch(`${API_BASE}/segment-frame/points`, {
+  positive_points?: number[][];
+  negative_points?: number[][];
+  box?: number[] | null;
+  mask_b64?: string;
+}) {
+  return handleResponse(await fetch(`${API_BASE}/segment-frame`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-  });
-  return handleResponse(res);
+  }));
 }
-
-export async function segmentFrameMask(body: {
-  video_name: string;
-  frame_idx: number;
-  obj_id: number;
-  obj_label: string;
-  mask_b64: string;
-}): Promise<{ mask_path: string }> {
-  const res = await fetch(`${API_BASE}/segment-frame/mask`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  return handleResponse(res);
-}
-
-// ── Propagation ───────────────────────────────────────────────────────────────
-
+// ── Propagation ─────────────────────────────────────────────────────────────
 export async function propagate(
   videoName: string,
   startFrameIdx: number,
   endFrameIdx?: number,
-): Promise<{ total_masks_saved: number; masks_folder: string }> {
-  const res = await fetch(`${API_BASE}/propagate`, {
+) {
+  return handleResponse(await fetch(`${API_BASE}/propagate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -121,65 +92,33 @@ export async function propagate(
       start_frame_idx: startFrameIdx,
       end_frame_idx: endFrameIdx ?? null,
     }),
-  });
-  return handleResponse(res);
+  }));
 }
 
-// ── Polygon extraction ────────────────────────────────────────────────────────
-
-/**
- * Fetch the mask saved for (videoName, frameIdx, objId) and return it as
- * simplified polygon point arrays ready for the annotation canvas.
- *
- * Each polygon is an array of { x, y } objects in video-pixel coordinates.
- */
+// ── Polygon extraction ──────────────────────────────────────────────────────
 export async function getMaskPolygons(
   videoName: string,
   frameIdx: number,
   objId: number,
 ): Promise<{ polygons: { x: number; y: number }[][] }> {
-  const url =
-    `${API_BASE}/videos/${encodeURIComponent(videoName)}/frames/${frameIdx}/polygons` +
-    `?obj_id=${objId}`;
-  const res = await fetch(url);
-  return handleResponse(res);
+  const url = `${API_BASE}/videos/${encodeURIComponent(videoName)}/frames/${frameIdx}/polygons?obj_id=${objId}`;
+  return handleResponse(await fetch(url));
 }
 
-// ── Object metadata ───────────────────────────────────────────────────────────
-
-/**
- * Get object labels from mask filenames for a video.
- * Returns a map of obj_id (as string) -> label
- */
-export async function getObjectLabels(
-  videoName: string,
-): Promise<{ objects: Record<string, string> }> {
-  const res = await fetch(`${API_BASE}/videos/${encodeURIComponent(videoName)}/objects`);
-  return handleResponse(res);
+// ── Object metadata ─────────────────────────────────────────────────────────
+export async function getObjectLabels(videoName: string) {
+  return handleResponse(await fetch(`${API_BASE}/videos/${encodeURIComponent(videoName)}/objects`));
 }
 
-// ── Masked video render ───────────────────────────────────────────────────────
-
-/**
- * Render the masked video.
- *
- * @param videoName  - server-side video name
- * @param objColors  - map of obj_id (as string) → { r, g, b } (0-255 each)
- * @param alpha      - overlay opacity (default 0.45)
- */
+// ── Masked video render ─────────────────────────────────────────────────────
 export async function renderMaskedVideo(
   videoName: string,
   objColors: Record<string, ObjColorEntry> = {},
   alpha = 0.45,
-): Promise<{ masked_video_name: string; video_url: string }> {
-  const res = await fetch(`${API_BASE}/render-masked-video`, {
+) {
+  return handleResponse(await fetch(`${API_BASE}/render-masked-video`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      video_name: videoName,
-      alpha,
-      obj_colors: objColors,
-    }),
-  });
-  return handleResponse(res);
+    body: JSON.stringify({ video_name: videoName, alpha, obj_colors: objColors }),
+  }));
 }

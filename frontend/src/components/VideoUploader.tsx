@@ -1,6 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
-import { Upload, Film, CheckCircle } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { Upload, Film } from 'lucide-react';
 import { Progress } from '@/components/ui/progress';
 
 interface VideoUploaderProps {
@@ -15,9 +14,9 @@ const VideoUploader = ({ onUploadComplete, uploadProgress, extractionProgress, s
   const [isDragging, setIsDragging] = useState(false);
 
   const handleFile = useCallback((file: File) => {
-    if (!file.type.startsWith('video/')) return;
-    const url = URL.createObjectURL(file);
-    onUploadComplete(file, url);
+    if (file.type.startsWith('video/')) {
+      onUploadComplete(file, URL.createObjectURL(file));
+    }
   }, [onUploadComplete]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
