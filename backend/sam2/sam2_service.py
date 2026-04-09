@@ -70,11 +70,7 @@ class SAM2Service:
         predictor = self._get_predictor()
 
         with torch.inference_mode():
-            if obj_id not in state["obj_id_to_idx"]:
-                pass
-                #predictor.reset_state(state)
-            else:
-                predictor.reset_state_for_objectId(state, obj_id)
+            predictor.remove_object(state,obj_id)
         
         # First, add mask if provided
         if binary_mask is not None:
