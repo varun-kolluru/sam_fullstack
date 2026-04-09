@@ -69,12 +69,20 @@ class SAM2Service:
         state = self._require_state(video_name)
         predictor = self._get_predictor()
 
-        with torch.inference_mode():
-            predictor.remove_object(state,obj_id)
+        # Determine what type of prompts we have
+        has_points = (pos_points and len(pos_points) > 0) or (neg_points and len(neg_points) > 0)
+        has_box = box is not None
+        has_mask = binary_mask is not None
         
-        # First, add mask if provided
-        if binary_mask is not None:
-            print("mask also present")
+        if not (has_mask or has_points or has_box):
+            raise ValueError("At least one of binary_mask, pos_points, neg_points, or box must be provided")
+        
+        # Only remove object if we're starting fresh (not refining existing mask)
+        with torch.inference_mode():
+            predictor.remove_object(state, obj_id)
+        
+        # Step 1: Add mask if provided (this establishes the initial segmentation)
+        if has_mask:
             with torch.inference_mode():
                 _, out_obj_ids, out_mask_logits = predictor.add_new_mask(
                     inference_state=state,
@@ -83,10 +91,7 @@ class SAM2Service:
                     mask=binary_mask.astype(bool),
                 )
         
-        # Then, add points/box if provided (to refine the mask)
-        has_points = (pos_points and len(pos_points) > 0) or (neg_points and len(neg_points) > 0)
-        has_box = box is not None
-        
+        # Step 2: Add points/box if provided (this refines the mask from step 1, or creates initial if no mask)
         if has_points or has_box:
             # Build points/labels arrays
             all_points, all_labels = [], []
@@ -107,7 +112,7 @@ class SAM2Service:
             with torch.inference_mode():
                 _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(**kwargs)
         
-        # If only mask was provided, out_obj_ids and out_mask_logits are already set
+        # Extract the mask for the requested object
         obj_index = out_obj_ids.index(obj_id) if obj_id in out_obj_ids else 0
         return self._logits_to_uint8(out_mask_logits[obj_index])
 
