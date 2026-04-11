@@ -34,8 +34,9 @@ BASE_DIR = "storage"
 VIDEO_DIR = os.path.join(BASE_DIR, "videos")
 FRAME_DIR = os.path.join(BASE_DIR, "frames")
 MASK_DIR = os.path.join(BASE_DIR, "masks")
+BATCH_DIR = os.path.join(BASE_DIR, "tmp_batches")
 
-for _d in (VIDEO_DIR, FRAME_DIR, MASK_DIR):
+for _d in (VIDEO_DIR, FRAME_DIR, MASK_DIR,BATCH_DIR):
     os.makedirs(_d, exist_ok=True)
 
 app.mount("/storage", StaticFiles(directory=BASE_DIR), name="storage")
