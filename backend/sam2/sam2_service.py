@@ -18,7 +18,7 @@ class SAM2Service:
         self,
         cfg: str = "configs/sam2.1/sam2.1_hiera_t.yaml",
         ckpt: str = "checkpoints/sam2.1_hiera_tiny.pt",
-        batch_size: int = 30
+        batch_size: int = 120
     ):
         """
         Initialize SAM2 Service for long video processing.
