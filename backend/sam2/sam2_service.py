@@ -18,7 +18,7 @@ class SAM2Service:
         self,
         cfg: str = "configs/sam2.1/sam2.1_hiera_t.yaml",
         ckpt: str = "checkpoints/sam2.1_hiera_tiny.pt",
-        batch_size: int = 10
+        batch_size: int = 30
     ):
         """
         Initialize SAM2 Service for long video processing.
@@ -374,6 +374,7 @@ class SAM2Service:
         Returns:
             Number of masks saved
         """
+        end_frame_idx = None #start_frame_idx + self.batch_size*20
         if video_name not in self.video_metadata:
             raise RuntimeError(f"Video '{video_name}' not initialized")
         

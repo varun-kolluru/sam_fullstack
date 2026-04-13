@@ -413,7 +413,7 @@ def render_masked_video_endpoint(req: RenderMaskedVideoRequest):
     h, w = first_frame.shape[:2]
     
     out_path = os.path.join(VIDEO_DIR, f"{video_name}_masked.mp4")
-    fourcc = cv2.VideoWriter_fourcc(*"avc1")
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(out_path, fourcc, fps, (w, h))
     
     # Collect all object IDs
