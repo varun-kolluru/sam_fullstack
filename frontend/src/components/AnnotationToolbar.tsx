@@ -28,20 +28,16 @@ interface AnnotationToolbarProps {
   onToggleHidePrompts: () => void;
   annotations: Annotations;
   onAnnotationsChange: (a: Annotations) => void;
-  /** Label of the currently active object */
   activeObjectLabel?: string;
-  /** Hex colour of the currently active object */
   activeObjectColor?: string;
 }
 
 const AnnotationToolbar = ({
   activeTool, onToolChange, onSegment, onTrack, onClear,
-  onRenderMaskedVideo, onToggleMaskedVideo,
-  onGetPolygons,
+  onRenderMaskedVideo, onToggleMaskedVideo, onGetPolygons,
   canSegment, canTrack, canRenderMasked, canGetPolygons,
   isSegmenting, isTracking, isRenderingMasked, isGettingPolygons,
-  showingMasked, maskedVideoReady,
-  isPaused,
+  showingMasked, maskedVideoReady, isPaused,
   hidePrompts, onToggleHidePrompts,
   annotations, onAnnotationsChange,
   activeObjectLabel = 'Object',
@@ -54,11 +50,6 @@ const AnnotationToolbar = ({
     { id: 'polygon', label: 'Polygon', icon: Pentagon },
   ];
 
-  const handleMaskedVideoClick = () => {
-    if (maskedVideoReady) onToggleMaskedVideo();
-    else onRenderMaskedVideo();
-  };
-
   const handleUndo = () => {
     if (activeTool === 'positive' && annotations.positivePoints.length > 0) {
       onAnnotationsChange({ ...annotations, positivePoints: annotations.positivePoints.slice(0, -1) });
@@ -66,31 +57,24 @@ const AnnotationToolbar = ({
       onAnnotationsChange({ ...annotations, negativePoints: annotations.negativePoints.slice(0, -1) });
     } else if (activeTool === 'box' && annotations.boxes.length > 0) {
       onAnnotationsChange({ ...annotations, boxes: annotations.boxes.slice(0, -1) });
-    } else if (activeTool === 'polygon') {
-      onAnnotationsChange({
-        ...annotations,
-        polygons: annotations.polygons.length > 0
-          ? (() => {
-              const polys = [...annotations.polygons];
-              const last = [...polys[polys.length - 1]];
-              if (last.length > 1) { polys[polys.length - 1] = last.slice(0, -1); }
-              else { polys.pop(); }
-              return polys;
-            })()
-          : annotations.polygons,
-        __undoPolygonPoint: true,
-      } as any);
+    } else if (activeTool === 'polygon' && annotations.polygons.length > 0) {
+      const polys = [...annotations.polygons];
+      const last = [...polys[polys.length - 1]];
+      if (last.length > 1) {
+        polys[polys.length - 1] = last.slice(0, -1);
+      } else {
+        polys.pop();
+      }
+      onAnnotationsChange({ ...annotations, polygons: polys, __undoPolygonPoint: true } as any);
     }
   };
 
-  const canUndo = (() => {
-    if (!isPaused) return false;
-    if (activeTool === 'positive') return annotations.positivePoints.length > 0;
-    if (activeTool === 'negative') return annotations.negativePoints.length > 0;
-    if (activeTool === 'box') return annotations.boxes.length > 0;
-    if (activeTool === 'polygon') return true;
-    return false;
-  })();
+  const canUndo = isPaused && (
+    (activeTool === 'positive' && annotations.positivePoints.length > 0) ||
+    (activeTool === 'negative' && annotations.negativePoints.length > 0) ||
+    (activeTool === 'box' && annotations.boxes.length > 0) ||
+    (activeTool === 'polygon')
+  );
 
   return (
     <div className="flex items-center gap-3 p-4 rounded-xl border border-border bg-card flex-wrap">
@@ -103,10 +87,7 @@ const AnnotationToolbar = ({
           color: activeObjectColor,
         }}
       >
-        <span
-          className="w-2 h-2 rounded-full"
-          style={{ backgroundColor: activeObjectColor }}
-        />
+        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: activeObjectColor }} />
         {activeObjectLabel}
       </div>
 
@@ -117,15 +98,15 @@ const AnnotationToolbar = ({
           return (
             <Button
               key={tool.id}
-              variant="tool"
-              size="sm"
+              variant="tool" size="sm"
               data-active={isActive}
               disabled={!isPaused}
               onClick={() => onToolChange(isActive ? 'none' : tool.id)}
               className="gap-1.5"
               style={isActive ? { borderColor: activeObjectColor + '80', color: activeObjectColor } : {}}
             >
-              <tool.icon className={`h-4 w-4 ${tool.id === 'negative' ? 'text-destructive' : ''}`}
+              <tool.icon
+                className={`h-4 w-4 ${tool.id === 'negative' ? 'text-destructive' : ''}`}
                 style={isActive && tool.id !== 'negative' ? { color: activeObjectColor } : {}}
               />
               <span className="text-xs hidden sm:inline">{tool.label}</span>
@@ -136,30 +117,16 @@ const AnnotationToolbar = ({
 
       {/* Undo */}
       {activeTool !== 'none' && (
-        <Button
-          variant="ghost" size="sm"
-          disabled={!canUndo}
-          onClick={handleUndo}
-          className="text-muted-foreground gap-1.5"
-          title="Undo last annotation"
-        >
+        <Button variant="ghost" size="sm" disabled={!canUndo} onClick={handleUndo} className="text-muted-foreground gap-1.5">
           <Undo2 className="h-4 w-4" />
           <span className="hidden sm:inline text-xs">Undo</span>
         </Button>
       )}
 
-      {!isPaused && (
-        <p className="text-xs text-muted-foreground">Pause to annotate</p>
-      )}
+      {!isPaused && <p className="text-xs text-muted-foreground">Pause to annotate</p>}
 
       <div className="ml-auto flex items-center gap-2">
-        {/* Hide / Show Prompts */}
-        <Button
-          variant="ghost" size="sm"
-          onClick={onToggleHidePrompts}
-          className="text-muted-foreground gap-1.5"
-          title={hidePrompts ? 'Show prompts' : 'Hide prompts'}
-        >
+        <Button variant="ghost" size="sm" onClick={onToggleHidePrompts} className="text-muted-foreground gap-1.5">
           {hidePrompts ? (
             <><Eye className="h-4 w-4" /><span className="hidden sm:inline text-xs">Show Prompts</span></>
           ) : (
@@ -172,31 +139,21 @@ const AnnotationToolbar = ({
           <span className="hidden sm:inline">Clear</span>
         </Button>
 
-        <Button
-          variant="segment" size="sm"
-          disabled={!canSegment || isSegmenting}
-          onClick={onSegment}
-        >
+        <Button variant="segment" size="sm" disabled={!canSegment || isSegmenting} onClick={onSegment}>
           <Sparkles className="h-4 w-4" />
           {isSegmenting ? 'Segmenting...' : 'Segment'}
         </Button>
 
         <Button
-          variant="outline" size="sm"
-          disabled={isGettingPolygons}
-          onClick={onGetPolygons}
+          variant="outline" size="sm" disabled={isGettingPolygons} onClick={onGetPolygons}
           className="gap-1.5 border-violet-500/40 text-violet-500 hover:bg-violet-500/10 disabled:opacity-40"
-          title="Fetch the saved mask for this frame and convert it to editable polygon points"
+          title="Fetch saved mask and convert to editable polygon points"
         >
           <Shapes className="h-4 w-4" />
           {isGettingPolygons ? 'Fetching...' : 'Get Polygons'}
         </Button>
 
-        <Button
-          variant="glow" size="sm"
-          disabled={!canTrack || isTracking}
-          onClick={onTrack}
-        >
+        <Button variant="glow" size="sm" disabled={!canTrack || isTracking} onClick={onTrack}>
           <Layers className="h-4 w-4" />
           {isTracking ? 'Tracking...' : 'Track All'}
         </Button>
@@ -204,7 +161,7 @@ const AnnotationToolbar = ({
         <Button
           variant="outline" size="sm"
           disabled={isRenderingMasked || !canRenderMasked}
-          onClick={handleMaskedVideoClick}
+          onClick={maskedVideoReady ? onToggleMaskedVideo : onRenderMaskedVideo}
           className="gap-1.5 border-primary/40 text-primary hover:bg-primary/10 disabled:opacity-40"
         >
           {isRenderingMasked ? (

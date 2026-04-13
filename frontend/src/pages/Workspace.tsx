@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Brain, ArrowLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -9,16 +9,8 @@ import VideoPlayer, { type Annotations, type Point } from '@/components/VideoPla
 import AnnotationToolbar from '@/components/AnnotationToolbar';
 import ObjectManager, { type TrackedObject } from '@/components/ObjectManager';
 import {
-  uploadVideo,
-  selectVideo,
-  segmentFramePoints,
-  segmentFrameMask,
-  propagate,
-  renderMaskedVideo,
-  getVideoStreamUrl,
-  getObjectLabels,
-  getMaskPolygons,
-  API_BASE,
+  uploadVideo, selectVideo, segmentFrame, propagate,
+  renderMaskedVideo, getVideoStreamUrl, getObjectLabels, getMaskPolygons, API_BASE,
 } from '@/lib/api';
 
 type Tool = 'none' | 'positive' | 'negative' | 'box' | 'polygon';
@@ -31,7 +23,6 @@ const emptyAnnotations: Annotations = {
   polygons: [],
 };
 
-// Palette of distinct colours for objects (hex for UI, rgb for API)
 export const OBJECT_PALETTE: { hex: string; r: number; g: number; b: number }[] = [
   { hex: '#1d9e75', r: 29, g: 158, b: 117 },
   { hex: '#3b63eb', r: 59, g: 99, b: 235 },
@@ -44,10 +35,10 @@ export const OBJECT_PALETTE: { hex: string; r: number; g: number; b: number }[] 
 ];
 
 function polygonToBinaryMaskB64(polygons: Point[][], width: number, height: number): string {
-  const offscreen = document.createElement('canvas');
-  offscreen.width = width;
-  offscreen.height = height;
-  const ctx = offscreen.getContext('2d')!;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d')!;
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, width, height);
   ctx.fillStyle = '#fff';
@@ -59,7 +50,7 @@ function polygonToBinaryMaskB64(polygons: Point[][], width: number, height: numb
     ctx.closePath();
     ctx.fill();
   }
-  return offscreen.toDataURL('image/png').split(',')[1];
+  return canvas.toDataURL('image/png').split(',')[1];
 }
 
 const Workspace = () => {
@@ -80,47 +71,36 @@ const Workspace = () => {
   const [trackingProgress, setTrackingProgress] = useState(0);
   const [activeTool, setActiveTool] = useState<Tool>('none');
   const [isPaused, setIsPaused] = useState(true);
-  const [hasTracked, setHasTracked] = useState(false);
   const [clearSignal, setClearSignal] = useState(0);
   const [hidePrompts, setHidePrompts] = useState(false);
   const [isGettingPolygons, setIsGettingPolygons] = useState(false);
 
-  // ── Multi-object state ────────────────────────────────────────────────────
-  // Each TrackedObject has { id, label, color } where id is the SAM-2 obj_id.
+  // Multi-object state
   const [objects, setObjects] = useState<TrackedObject[]>([
     { id: 1, label: 'Object 1', color: OBJECT_PALETTE[0] },
   ]);
-  const [activeObjectId, setActiveObjectId] = useState<number>(1);
-
-  // Per-object annotations map: obj_id → Annotations
-  const [annotationsMap, setAnnotationsMap] = useState<Record<number, Annotations>>({
-    1: emptyAnnotations,
-  });
-
-  // Per-object mask URLs (from segmentation): obj_id → url
+  const [activeObjectId, setActiveObjectId] = useState(1);
+  const [annotationsMap, setAnnotationsMap] = useState<Record<number, Annotations>>({ 1: emptyAnnotations });
   const [maskUrlMap, setMaskUrlMap] = useState<Record<number, string | null>>({});
-
-  // Per-object "has been segmented" flag
   const [segmentedObjects, setSegmentedObjects] = useState<Set<number>>(new Set());
 
-  // Current annotations for the active object (convenience alias)
   const annotations = annotationsMap[activeObjectId] ?? emptyAnnotations;
   const setAnnotations = useCallback((a: Annotations) => {
     setAnnotationsMap(prev => ({ ...prev, [activeObjectId]: a }));
   }, [activeObjectId]);
 
-  // Mask URL for the active object
   const activeMaskUrl = maskUrlMap[activeObjectId] ?? null;
-
   const currentTimeRef = useRef(0);
   const seekToRef = useRef<((time: number) => void) | null>(null);
 
-  // ── Object management ─────────────────────────────────────────────────────
-
+  // ── Object management ────────────────────────────────────────────────────
   const handleAddObject = useCallback((label: string) => {
     const newId = Math.max(...objects.map(o => o.id)) + 1;
-    const color = OBJECT_PALETTE[(newId - 1) % OBJECT_PALETTE.length];
-    const newObj: TrackedObject = { id: newId, label, color };
+    const newObj: TrackedObject = {
+      id: newId,
+      label,
+      color: OBJECT_PALETTE[(newId - 1) % OBJECT_PALETTE.length],
+    };
     setObjects(prev => [...prev, newObj]);
     setAnnotationsMap(prev => ({ ...prev, [newId]: emptyAnnotations }));
     setActiveObjectId(newId);
@@ -128,11 +108,10 @@ const Workspace = () => {
   }, [objects]);
 
   const handleRemoveObject = useCallback((id: number) => {
-    setObjects(prev => {
-      const remaining = prev.filter(o => o.id !== id);
-      if (remaining.length === 0) return prev; // always keep at least one
-      return remaining;
-    });
+    const remaining = objects.filter(o => o.id !== id);
+    if (remaining.length === 0) return;
+    
+    setObjects(remaining);
     setAnnotationsMap(prev => {
       const next = { ...prev };
       delete next[id];
@@ -148,49 +127,36 @@ const Workspace = () => {
       next.delete(id);
       return next;
     });
-    setActiveObjectId(prev => (prev === id ? objects.find(o => o.id !== id)?.id ?? 1 : prev));
+    setActiveObjectId(prev => (prev === id ? remaining[0].id : prev));
   }, [objects]);
 
   const handleRenameObject = useCallback((id: number, label: string) => {
     setObjects(prev => prev.map(o => o.id === id ? { ...o, label } : o));
   }, []);
 
-  // ── Video loading & Object restoration ────────────────────────────────────
-
-  const handleFrameIdxChange = useCallback((idx: number) => setFrameIdx(idx), []);
-  const handleCurrentTimeChange = useCallback((t: number) => { currentTimeRef.current = t; }, []);
-
-  const setAndRememberVideoUrl = (url: string) => {
-    setOriginalVideoUrl(url);
-    setVideoUrl(url);
-  };
-
-  /**
-   * Restore objects from existing mask files when selecting a video
-   */
+  // ── Object restoration ──────────────────────────────────────────────────
   const restoreObjectsFromMasks = useCallback(async (name: string) => {
     try {
       const { objects: labelMap } = await getObjectLabels(name);
-
       if (Object.keys(labelMap).length > 0) {
-        // Build TrackedObject array from label map
         const restoredObjects: TrackedObject[] = [];
         const restoredAnnotationsMap: Record<number, Annotations> = {};
-
+        
         for (const [objIdStr, label] of Object.entries(labelMap)) {
           const objId = parseInt(objIdStr, 10);
-          const color = OBJECT_PALETTE[(objId - 1) % OBJECT_PALETTE.length];
-          restoredObjects.push({ id: objId, label, color });
+          restoredObjects.push({
+            id: objId,
+            label,
+            color: OBJECT_PALETTE[(objId - 1) % OBJECT_PALETTE.length],
+          });
           restoredAnnotationsMap[objId] = emptyAnnotations;
         }
-
-        // Sort by id
+        
         restoredObjects.sort((a, b) => a.id - b.id);
-
         setObjects(restoredObjects);
         setAnnotationsMap(restoredAnnotationsMap);
         setActiveObjectId(restoredObjects[0]?.id ?? 1);
-
+        
         toast({
           title: 'Objects Restored',
           description: `Found ${restoredObjects.length} existing object(s) with masks.`,
@@ -198,9 +164,14 @@ const Workspace = () => {
       }
     } catch (err) {
       console.error('Failed to restore objects:', err);
-      // If restoration fails, keep default single object
     }
   }, [toast]);
+
+  // ── Video loading ────────────────────────────────────────────────────────
+  const setAndRememberVideoUrl = (url: string) => {
+    setOriginalVideoUrl(url);
+    setVideoUrl(url);
+  };
 
   const handleSelectExisting = useCallback(async (name: string) => {
     setStatus('selecting');
@@ -209,14 +180,11 @@ const Workspace = () => {
       setVideoName(info.video_name);
       setFps(info.fps || 30);
       setAndRememberVideoUrl(getVideoStreamUrl(info.video_name));
-
-      // Restore objects from existing masks
       await restoreObjectsFromMasks(info.video_name);
-
       setStatus('ready');
       toast({ title: 'Video Loaded', description: `"${info.video_name}" ready (${info.total_frames} frames).` });
     } catch {
-      toast({ title: 'Selection Failed', description: 'Could not load video from server.', variant: 'destructive' });
+      toast({ title: 'Selection Failed', description: 'Could not load video.', variant: 'destructive' });
       setStatus('idle');
     }
   }, [toast, restoreObjectsFromMasks]);
@@ -232,53 +200,64 @@ const Workspace = () => {
       setStatus('ready');
       toast({ title: 'Upload Complete', description: `${result.total_frames} frames extracted.` });
     } catch (err: any) {
-      toast({ title: 'Upload Failed', description: err.message || 'Could not upload to backend.', variant: 'destructive' });
+      toast({ title: 'Upload Failed', description: err.message || 'Upload failed.', variant: 'destructive' });
       setStatus('idle');
     }
   }, [toast]);
 
   // ── Segmentation ──────────────────────────────────────────────────────────
-
   const hasPolygons = annotations.polygons.length > 0;
-  const hasPointsOrBox =
-    annotations.positivePoints.length > 0 ||
-    annotations.negativePoints.length > 0 ||
-    annotations.boxes.length > 0;
+  const hasPointsOrBox = annotations.positivePoints.length > 0 || annotations.negativePoints.length > 0 || annotations.boxes.length > 0;
   const canSegment = hasPolygons || hasPointsOrBox;
 
   const handleSegment = useCallback(async () => {
     if (!canSegment) return;
     setStatus('segmenting');
-
-    // Get the current object's label
-    const currentObject = objects.find(o => o.id === activeObjectId);
-    const objLabel = currentObject?.label ?? `Object ${activeObjectId}`;
-
+    
+    const objLabel = objects.find(o => o.id === activeObjectId)?.label ?? `Object ${activeObjectId}`;
+    
     try {
-      let result;
+      const requestBody: {
+        video_name: string;
+        frame_idx: number;
+        obj_id: number;
+        obj_label: string;
+        positive_points?: number[][];
+        negative_points?: number[][];
+        box?: number[] | null;
+        mask_b64?: string;
+      } = {
+        video_name: videoName,
+        frame_idx: frameIdx,
+        obj_id: activeObjectId,
+        obj_label: objLabel,
+      };
+
+      // Add mask if polygons exist
       if (hasPolygons) {
-        const maskB64 = polygonToBinaryMaskB64(annotations.polygons, videoSize.w, videoSize.h);
-        result = await segmentFrameMask({
-          video_name: videoName,
-          frame_idx: frameIdx,
-          obj_id: activeObjectId,
-          obj_label: objLabel,  // Include label
-          mask_b64: maskB64,
-        });
-      } else {
-        const lastBox = annotations.boxes.length > 0
-          ? (() => { const b = annotations.boxes[annotations.boxes.length - 1]; return [b.x1, b.y1, b.x2, b.y2]; })()
-          : null;
-        result = await segmentFramePoints({
-          video_name: videoName,
-          frame_idx: frameIdx,
-          obj_id: activeObjectId,
-          obj_label: objLabel,  // Include label
-          positive_points: annotations.positivePoints.map(p => [p.x, p.y]),
-          negative_points: annotations.negativePoints.map(p => [p.x, p.y]),
-          box: lastBox,
-        });
+        requestBody.mask_b64 = polygonToBinaryMaskB64(
+          annotations.polygons,
+          videoSize.w,
+          videoSize.h
+        );
       }
+
+      // Add points if they exist
+      if (annotations.positivePoints.length > 0) {
+        requestBody.positive_points = annotations.positivePoints.map(p => [p.x, p.y]);
+      }
+      if (annotations.negativePoints.length > 0) {
+        requestBody.negative_points = annotations.negativePoints.map(p => [p.x, p.y]);
+      }
+
+      // Add box if it exists
+      if (annotations.boxes.length > 0) {
+        const b = annotations.boxes[annotations.boxes.length - 1];
+        requestBody.box = [b.x1, b.y1, b.x2, b.y2];
+      }
+
+      const result = await segmentFrame(requestBody);
+      
       if (result) {
         setMaskUrlMap(prev => ({
           ...prev,
@@ -287,15 +266,21 @@ const Workspace = () => {
       }
       setSegmentedObjects(prev => new Set(prev).add(activeObjectId));
       setStatus('segmented');
-      toast({ title: 'Segmentation Complete', description: `Mask for "${objLabel}" ready.` });
+      toast({ 
+        title: 'Segmentation Complete', 
+        description: `Mask for "${objLabel}" ready.` 
+      });
     } catch (err: any) {
-      toast({ title: 'Segmentation Failed', description: err.message || 'Could not run segmentation.', variant: 'destructive' });
+      toast({ 
+        title: 'Segmentation Failed', 
+        description: err.message || 'Segmentation failed.', 
+        variant: 'destructive' 
+      });
       setStatus('ready');
     }
   }, [videoName, frameIdx, annotations, canSegment, hasPolygons, videoSize, activeObjectId, objects, toast]);
 
-  // ── Tracking ──────────────────────────────────────────────────────────────
-
+  // ── Tracking ───────────────────────────────────────────────────────────────
   const canTrack = segmentedObjects.size > 0;
 
   const handleTrack = useCallback(async () => {
@@ -305,11 +290,10 @@ const Workspace = () => {
       const progressInterval = setInterval(() => {
         setTrackingProgress(prev => Math.min(prev + Math.random() * 8, 90));
       }, 600);
-      const result = await propagate(videoName, frameIdx, frameIdx + 200);
+      const result = await propagate(videoName, frameIdx, frameIdx + 50);
       clearInterval(progressInterval);
       setTrackingProgress(100);
       setStatus('tracked');
-      setHasTracked(true);
       setMaskedVideoUrl(null);
       setShowingMasked(false);
       toast({ title: 'Tracking Complete', description: `${result.total_masks_saved} masks propagated for ${segmentedObjects.size} object(s).` });
@@ -319,15 +303,12 @@ const Workspace = () => {
     }
   }, [videoName, frameIdx, segmentedObjects.size, toast]);
 
-  // ── Get Polygons (mask → editable polygon vertices) ───────────────────────
-
+  // ── Get Polygons ────────────────────────────────────────────────────────────
   const canGetPolygons = status !== 'idle' && status !== 'uploading' && status !== 'selecting';
 
   const handleGetPolygons = useCallback(async () => {
     setIsGettingPolygons(true);
 
-    // If watching the masked video, switch back to the original first so the
-    // polygon overlay is visible on the correct canvas.
     if (showingMasked) {
       const savedTime = currentTimeRef.current;
       setVideoUrl(originalVideoUrl);
@@ -335,7 +316,6 @@ const Workspace = () => {
       seekToRef.current = (seek: (t: number) => void) => seek(savedTime);
     }
 
-    // Must be paused to annotate — pause the video if it's playing.
     setIsPaused(true);
 
     try {
@@ -343,51 +323,37 @@ const Workspace = () => {
       if (!polygons.length) {
         toast({
           title: 'No Polygons Found',
-          description: 'No saved mask for this frame/object yet. Segment the frame first.',
+          description: 'No saved mask yet. Segment first.',
           variant: 'destructive',
         });
         return;
       }
 
-      // Load polygons into annotations — this also makes canSegment true
       setAnnotations({ ...annotations, polygons });
-
-      // Mark this object as segmented so Track All stays enabled
       setSegmentedObjects(prev => new Set(prev).add(activeObjectId));
-
-      // Switch to polygon tool so vertices are immediately visible and draggable
       setActiveTool('polygon');
-
-      // Reflect segmented status if not already past it
       if (status === 'ready') setStatus('segmented');
 
       toast({
         title: 'Polygons Loaded',
-        description: `${polygons.length} polygon${polygons.length > 1 ? 's' : ''} imported — drag any vertex to refine, then hit Segment.`,
+        description: `${polygons.length} polygon${polygons.length > 1 ? 's' : ''} imported — drag vertices to refine, then hit Segment.`,
       });
     } catch (err: any) {
       toast({
         title: 'Failed to Get Polygons',
-        description: err.message || 'Could not fetch mask polygons.',
+        description: err.message || 'Could not fetch polygons.',
         variant: 'destructive',
       });
     } finally {
       setIsGettingPolygons(false);
     }
-  }, [
-    videoName, frameIdx, activeObjectId,
-    annotations, setAnnotations,
-    showingMasked, originalVideoUrl,
-    status, toast,
-  ]);
+  }, [videoName, frameIdx, activeObjectId, annotations, setAnnotations, showingMasked, originalVideoUrl, status, toast]);
 
-  // ── Masked video ──────────────────────────────────────────────────────────
-
+  // ── Masked video ─────────────────────────────────────────────────────────────
   const handleRenderMaskedVideo = useCallback(async () => {
     setIsRenderingMasked(true);
     const savedTime = currentTimeRef.current;
 
-    // Build obj_colors map: obj_id (string) → { r, g, b }
     const obj_colors: Record<string, { r: number; g: number; b: number }> = {};
     for (const obj of objects) {
       obj_colors[String(obj.id)] = { r: obj.color.r, g: obj.color.g, b: obj.color.b };
@@ -421,10 +387,8 @@ const Workspace = () => {
     seekToRef.current = (seek: (t: number) => void) => seek(savedTime);
   }, [showingMasked, maskedVideoUrl, originalVideoUrl]);
 
-  // ── Clear ─────────────────────────────────────────────────────────────────
-
+  // ── Clear ───────────────────────────────────────────────────────────────────
   const handleClear = () => {
-    // Clear annotations only for the active object
     setAnnotationsMap(prev => ({ ...prev, [activeObjectId]: emptyAnnotations }));
     setMaskUrlMap(prev => ({ ...prev, [activeObjectId]: null }));
     setActiveTool('none');
@@ -448,7 +412,6 @@ const Workspace = () => {
     setMaskUrlMap({});
     setActiveTool('none');
     setSegmentedObjects(new Set());
-    setHasTracked(false);
     setMaskedVideoUrl(null);
     if (showingMasked) {
       setVideoUrl(originalVideoUrl);
@@ -458,11 +421,8 @@ const Workspace = () => {
     if (status !== 'idle' && status !== 'uploading' && status !== 'selecting') setStatus('ready');
   };
 
-  // ── Render ────────────────────────────────────────────────────────────────
-
+  // ── Render ────────────────────────────────────────────────────────────────────
   const showSelector = status === 'idle' || status === 'uploading' || status === 'selecting';
-  const showPlayer = !showSelector;
-
   const activeObject = objects.find(o => o.id === activeObjectId);
 
   return (
@@ -484,7 +444,7 @@ const Workspace = () => {
               <span className="px-2 py-0.5 rounded-full bg-primary/20 text-primary font-medium text-xs">masked</span>
             )}
             <span className="px-2 py-0.5 rounded-full bg-primary/10 text-primary font-medium capitalize">{status}</span>
-            {showPlayer && (
+            {!showSelector && (
               <Button
                 variant="ghost" size="sm" className="text-xs"
                 onClick={() => {
@@ -511,9 +471,8 @@ const Workspace = () => {
           />
         )}
 
-        {showPlayer && (
+        {!showSelector && (
           <div className="w-full max-w-7xl flex flex-col gap-4">
-            {/* Object manager panel */}
             <ObjectManager
               objects={objects}
               activeObjectId={activeObjectId}
@@ -533,8 +492,8 @@ const Workspace = () => {
                 maskUrl={showingMasked ? null : activeMaskUrl}
                 maskColor={activeObject?.color.hex}
                 fps={fps}
-                onFrameIdxChange={handleFrameIdxChange}
-                onCurrentTimeChange={handleCurrentTimeChange}
+                onFrameIdxChange={setFrameIdx}
+                onCurrentTimeChange={t => { currentTimeRef.current = t; }}
                 isPaused={isPaused}
                 onPausedChange={setIsPaused}
                 clearSignal={clearSignal}
