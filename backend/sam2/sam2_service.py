@@ -374,7 +374,7 @@ class SAM2Service:
         Returns:
             Number of masks saved
         """
-        end_frame_idx = None #start_frame_idx + self.batch_size*20
+        end_frame_idx = start_frame_idx + (self.batch_size*2)
         if video_name not in self.video_metadata:
             raise RuntimeError(f"Video '{video_name}' not initialized")
         
