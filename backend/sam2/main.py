@@ -379,7 +379,6 @@ def delete_video(video_name: str):
     
     return {"deleted": video_name}
 
-# ── Masked video render ────────────────────────────────────────────────────
 @app.post("/render-masked-video")
 def render_masked_video_endpoint(req: RenderMaskedVideoRequest):
     video_name = _safe_video_name(req.video_name)
@@ -413,8 +412,14 @@ def render_masked_video_endpoint(req: RenderMaskedVideoRequest):
     h, w = first_frame.shape[:2]
     
     out_path = os.path.join(VIDEO_DIR, f"{video_name}_masked.mp4")
-    fourcc = cv2.VideoWriter_fourcc(*"avc1")
+    
+    # Use mp4v codec (software-based, widely available)
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(out_path, fourcc, fps, (w, h))
+    
+    # Verify writer opened successfully
+    if not writer.isOpened():
+        raise HTTPException(status_code=500, detail="Failed to initialize video writer")
     
     # Collect all object IDs
     all_obj_ids = set()
