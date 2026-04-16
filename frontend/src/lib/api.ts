@@ -21,31 +21,34 @@ export async function listVideos(): Promise<{ videos: string[] }> {
   return handleResponse(await fetch(`${API_BASE}/videos`));
 }
 
-export async function selectVideo(videoName: string) {
+export async function selectVideo(videoName: string, fps?: number) {
   return handleResponse(await fetch(`${API_BASE}/select-video`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ video_name: videoName }),
+    body: JSON.stringify({ video_name: videoName, fps }),
   }));
 }
 
 export async function uploadVideo(
   file: File,
   name: string,
+  fps?: number,
   onProgress?: (pct: number) => void,
 ) {
   return new Promise((resolve, reject) => {
     const fd = new FormData();
     fd.append('video', file);
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', `${API_BASE}/upload-video?name=${encodeURIComponent(name)}`);
-    
+    let url = `${API_BASE}/upload-video?name=${encodeURIComponent(name)}`;
+    if (fps) url += `&fps=${fps}`;
+    xhr.open('POST', url);
+
     if (onProgress) {
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
       };
     }
-    
+
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) {
         resolve(JSON.parse(xhr.responseText));
@@ -55,7 +58,7 @@ export async function uploadVideo(
         reject(new Error(msg));
       }
     };
-    
+
     xhr.onerror = () => reject(new Error('Network error during upload'));
     xhr.send(fd);
   });
@@ -115,10 +118,11 @@ export async function renderMaskedVideo(
   videoName: string,
   objColors: Record<string, ObjColorEntry> = {},
   alpha = 0.45,
+  fps?: number,
 ) {
   return handleResponse(await fetch(`${API_BASE}/render-masked-video`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ video_name: videoName, alpha, obj_colors: objColors }),
+    body: JSON.stringify({ video_name: videoName, alpha, obj_colors: objColors, fps }),
   }));
 }

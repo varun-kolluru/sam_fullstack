@@ -94,19 +94,34 @@ def _frame_dir(name: str) -> str:
 def _mask_dir(name: str) -> str:
     return os.path.join(MASK_DIR, name)
 
-def _extract_frames(video_path: str, out_dir: str):
+def _extract_frames(video_path: str, out_dir: str, target_fps: float = None):
     os.makedirs(out_dir, exist_ok=True)
     cap = cv2.VideoCapture(video_path)
-    fps = cap.get(cv2.CAP_PROP_FPS)
+    native_fps = cap.get(cv2.CAP_PROP_FPS)
+    if native_fps <= 0:
+        native_fps = 30.0 # fallback
+        
+    use_fps = native_fps
+    if target_fps and target_fps < native_fps:
+        use_fps = target_fps
+        
+    sample_rate = native_fps / use_fps
     idx = 0
+    saved_count = 0
+    
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
-        cv2.imwrite(os.path.join(out_dir, f"{idx:05d}.jpg"), frame)
+            
+        target_idx = round(saved_count * sample_rate)
+        if idx == target_idx:
+            cv2.imwrite(os.path.join(out_dir, f"{saved_count:05d}.jpg"), frame)
+            saved_count += 1
         idx += 1
+        
     cap.release()
-    return idx, fps
+    return saved_count, use_fps
 
 def _require_video(name: str):
     if not os.path.exists(_video_path(name)):
@@ -127,6 +142,7 @@ def _save_mask_and_respond(mask: np.ndarray, video_name: str, frame_idx: int, ob
 # ── Pydantic models ────────────────────────────────────────────────────────
 class SelectVideoRequest(BaseModel):
     video_name: str
+    fps: float | None = None
 
 class SegmentFrameRequest(BaseModel):
     video_name: str
@@ -150,8 +166,9 @@ class ObjColorEntry(BaseModel):
 
 class RenderMaskedVideoRequest(BaseModel):
     video_name: str
-    alpha: float = 0.45
+    alpha: float | None = 0.45
     obj_colors: dict[str, ObjColorEntry] = Field(default_factory=dict)
+    fps: float | None = None
 
 # ── Video management endpoints ─────────────────────────────────────────────
 @app.get("/videos")
@@ -184,7 +201,7 @@ def video_info(video_name: str):
     return {"video_name": video_name, "fps": fps, "total_frames": total_frames}
 
 @app.post("/upload-video")
-async def upload_video_endpoint(video: UploadFile = File(...), name: str = Query("")):
+async def upload_video_endpoint(video: UploadFile = File(...), name: str = Query(""), fps: float | None = Query(None)):
     video_name = _safe_video_name(name) if name else _safe_video_name(
         video.filename or f"video_{uuid.uuid4().hex[:8]}")
     
@@ -199,30 +216,46 @@ async def upload_video_endpoint(video: UploadFile = File(...), name: str = Query
     
     fdir = _frame_dir(video_name)
     try:
-        total_frames, fps = _extract_frames(vpath, fdir)
+        total_frames, extracted_fps = _extract_frames(vpath, fdir, target_fps=fps)
     except Exception:
         os.remove(vpath)
         raise HTTPException(status_code=422, detail="Could not extract frames.")
     
     sam2.init_video(video_name, fdir)
-    return {"video_name": video_name, "fps": fps, "total_frames": total_frames}
+    return {"video_name": video_name, "fps": extracted_fps, "total_frames": total_frames}
 
 @app.post("/select-video")
 def select_video_endpoint(body: SelectVideoRequest):
     video_name = _safe_video_name(body.video_name)
     _require_video(video_name)
-    _require_frames(video_name)
     
-    sam2.init_video(video_name, _frame_dir(video_name))
+    vpath = _video_path(video_name)
+    fdir = _frame_dir(video_name)
     
-    cap = cv2.VideoCapture(_video_path(video_name))
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    cap.release()
-    
-    fd = _frame_dir(video_name)
-    total_frames = len([f for f in os.listdir(fd) if f.endswith(".jpg")])
-    
-    return {"video_name": video_name, "fps": fps, "total_frames": total_frames}
+    # If user provides a target FPS, we may need to re-extract
+    if body.fps is not None:
+        # Check current FPS of extracted frames
+        # To simplify, if user requests a specific FPS, we re-extract to be sure.
+        # This also ensures previous masks are cleared via sam2.clear_video below.
+        import shutil
+        sam2.clear_video(video_name)
+        if os.path.exists(fdir):
+            shutil.rmtree(fdir)
+        mdir = _mask_dir(video_name)
+        if os.path.exists(mdir):
+            shutil.rmtree(mdir)
+        
+        total_frames, extracted_fps = _extract_frames(vpath, fdir, target_fps=body.fps)
+    else:
+        _require_frames(video_name)
+        fd = _frame_dir(video_name)
+        total_frames = len([f for f in os.listdir(fd) if f.endswith(".jpg")])
+        cap = cv2.VideoCapture(vpath)
+        extracted_fps = cap.get(cv2.CAP_PROP_FPS)
+        cap.release()
+
+    sam2.init_video(video_name, fdir)
+    return {"video_name": video_name, "fps": extracted_fps, "total_frames": total_frames}
 
 # ── Segmentation endpoints ─────────────────────────────────────────────────
 
@@ -401,7 +434,10 @@ def render_masked_video_endpoint(req: RenderMaskedVideoRequest):
             pass
     
     cap = cv2.VideoCapture(_video_path(video_name))
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    if not req.fps:
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    else:
+        fps = req.fps
     cap.release()
     
     frame_files = sorted(f for f in os.listdir(fdir) if f.endswith(".jpg"))

@@ -4,10 +4,17 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Progress } from '@/components/ui/progress';
 import { listVideos } from '@/lib/api';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 
 interface VideoSelectorProps {
-  onSelectExisting: (videoName: string) => void;
-  onUploadNew: (file: File, name: string) => void;
+  onSelectExisting: (videoName: string, fps?: number) => void;
+  onUploadNew: (file: File, name: string, fps?: number) => void;
   uploadProgress: number;
   isUploading: boolean;
   isSelecting: boolean;
@@ -20,8 +27,11 @@ const VideoSelector = ({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [uploadName, setUploadName] = useState('');
+  const [selectedFps, setSelectedFps] = useState<string>('native');
   const [isDragging, setIsDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  
+  const currentFps = selectedFps === 'native' ? undefined : Number(selectedFps);
 
   const fetchVideos = useCallback(async () => {
     setLoading(true);
@@ -41,9 +51,9 @@ const VideoSelector = ({
   const handleFile = useCallback((file: File) => {
     if (file.type.startsWith('video/')) {
       const name = uploadName.trim() || file.name.replace(/\.[^.]+$/, '');
-      onUploadNew(file, name);
+      onUploadNew(file, name, currentFps);
     }
-  }, [onUploadNew, uploadName]);
+  }, [onUploadNew, uploadName, currentFps]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -72,6 +82,34 @@ const VideoSelector = ({
 
   return (
     <div className="w-full max-w-2xl mx-auto flex flex-col gap-8">
+      {/* FPS Settings */}
+      <div className="flex flex-col gap-2 p-4 rounded-xl border border-primary/20 bg-primary/5">
+        <label className="text-sm font-semibold text-primary flex items-center gap-2">
+          <RefreshCw className="h-4 w-4" />
+          Processing Framerate (FPS)
+        </label>
+        <div className="flex items-center gap-4">
+          <Select value={selectedFps} onValueChange={setSelectedFps}>
+            <SelectTrigger className="w-full bg-background border-primary/20">
+              <SelectValue placeholder="Select FPS" />
+            </SelectTrigger>
+            <SelectContent className="bg-card border-border">
+              <SelectItem value="native" className="text-foreground">Native Framerate (Original)</SelectItem>
+              <SelectItem value="1" className="text-foreground">1 FPS (Minimal)</SelectItem>
+              <SelectItem value="5" className="text-foreground">5 FPS</SelectItem>
+              <SelectItem value="10" className="text-foreground">10 FPS</SelectItem>
+              <SelectItem value="15" className="text-foreground">15 FPS</SelectItem>
+              <SelectItem value="24" className="text-foreground">24 FPS (Film)</SelectItem>
+              <SelectItem value="30" className="text-foreground">30 FPS (Standard)</SelectItem>
+              <SelectItem value="60" className="text-foreground">60 FPS (High Performance)</SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground max-w-[200px]">
+            Lower FPS speeds up propagation but loses temporal detail.
+          </p>
+        </div>
+      </div>
+
       {/* Upload Section */}
       <div className="flex flex-col gap-3">
         <Input
@@ -151,7 +189,7 @@ const VideoSelector = ({
               <button
                 key={name}
                 disabled={isSelecting}
-                onClick={() => onSelectExisting(name)}
+                onClick={() => onSelectExisting(name, currentFps)}
                 className="flex items-center justify-between gap-3 px-4 py-3 rounded-lg border border-border bg-background hover:border-primary/50 hover:bg-primary/5 transition-all text-left group disabled:opacity-50"
               >
                 <div className="flex items-center gap-3 min-w-0">

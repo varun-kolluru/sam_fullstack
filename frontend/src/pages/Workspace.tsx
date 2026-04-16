@@ -110,7 +110,7 @@ const Workspace = () => {
   const handleRemoveObject = useCallback((id: number) => {
     const remaining = objects.filter(o => o.id !== id);
     if (remaining.length === 0) return;
-    
+
     setObjects(remaining);
     setAnnotationsMap(prev => {
       const next = { ...prev };
@@ -141,7 +141,7 @@ const Workspace = () => {
       if (Object.keys(labelMap).length > 0) {
         const restoredObjects: TrackedObject[] = [];
         const restoredAnnotationsMap: Record<number, Annotations> = {};
-        
+
         for (const [objIdStr, label] of Object.entries(labelMap)) {
           const objId = parseInt(objIdStr, 10);
           restoredObjects.push({
@@ -151,12 +151,12 @@ const Workspace = () => {
           });
           restoredAnnotationsMap[objId] = emptyAnnotations;
         }
-        
+
         restoredObjects.sort((a, b) => a.id - b.id);
         setObjects(restoredObjects);
         setAnnotationsMap(restoredAnnotationsMap);
         setActiveObjectId(restoredObjects[0]?.id ?? 1);
-        
+
         toast({
           title: 'Objects Restored',
           description: `Found ${restoredObjects.length} existing object(s) with masks.`,
@@ -173,10 +173,10 @@ const Workspace = () => {
     setVideoUrl(url);
   };
 
-  const handleSelectExisting = useCallback(async (name: string) => {
+  const handleSelectExisting = useCallback(async (name: string, selectedFps?: number) => {
     setStatus('selecting');
     try {
-      const info = await selectVideo(name);
+      const info = await selectVideo(name, selectedFps);
       setVideoName(info.video_name);
       setFps(info.fps || 30);
       setAndRememberVideoUrl(getVideoStreamUrl(info.video_name));
@@ -189,11 +189,11 @@ const Workspace = () => {
     }
   }, [toast, restoreObjectsFromMasks]);
 
-  const handleUploadNew = useCallback(async (file: File, name: string) => {
+  const handleUploadNew = useCallback(async (file: File, name: string, selectedFps?: number) => {
     setStatus('uploading');
     setUploadProgress(0);
     try {
-      const result = await uploadVideo(file, name, (p) => setUploadProgress(p));
+      const result = await uploadVideo(file, name, selectedFps, (p) => setUploadProgress(p));
       setVideoName(result.video_name);
       setFps(result.fps || 30);
       setAndRememberVideoUrl(getVideoStreamUrl(result.video_name));
@@ -213,9 +213,9 @@ const Workspace = () => {
   const handleSegment = useCallback(async () => {
     if (!canSegment) return;
     setStatus('segmenting');
-    
+
     const objLabel = objects.find(o => o.id === activeObjectId)?.label ?? `Object ${activeObjectId}`;
-    
+
     try {
       const requestBody: {
         video_name: string;
@@ -257,7 +257,7 @@ const Workspace = () => {
       }
 
       const result = await segmentFrame(requestBody);
-      
+
       if (result) {
         setMaskUrlMap(prev => ({
           ...prev,
@@ -266,15 +266,15 @@ const Workspace = () => {
       }
       setSegmentedObjects(prev => new Set(prev).add(activeObjectId));
       setStatus('segmented');
-      toast({ 
-        title: 'Segmentation Complete', 
-        description: `Mask for "${objLabel}" ready.` 
+      toast({
+        title: 'Segmentation Complete',
+        description: `Mask for "${objLabel}" ready.`
       });
     } catch (err: any) {
-      toast({ 
-        title: 'Segmentation Failed', 
-        description: err.message || 'Segmentation failed.', 
-        variant: 'destructive' 
+      toast({
+        title: 'Segmentation Failed',
+        description: err.message || 'Segmentation failed.',
+        variant: 'destructive'
       });
       setStatus('ready');
     }
@@ -360,7 +360,7 @@ const Workspace = () => {
     }
 
     try {
-      const result = await renderMaskedVideo(videoName, obj_colors);
+      const result = await renderMaskedVideo(videoName, obj_colors, 0.45, fps);
       const url = `${API_BASE}${result.video_url}?t=${Date.now()}`;
       setMaskedVideoUrl(url);
       setVideoUrl(url);
@@ -372,7 +372,7 @@ const Workspace = () => {
     } finally {
       setIsRenderingMasked(false);
     }
-  }, [videoName, objects, toast]);
+  }, [videoName, objects, toast, fps]);
 
   const handleToggleMaskedVideo = useCallback(() => {
     if (!maskedVideoUrl) return;
