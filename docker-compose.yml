@@ -1,5 +1,5 @@
 # =============================================================================
-# MedSeg Vision — SAM Fullstack (NUCLEAR GPU BYPASS)
+# MedSeg Vision — SAM Fullstack (PORT RESTORATION 3000/8000)
 # =============================================================================
 services:
   backend:
@@ -9,7 +9,7 @@ services:
     container_name: medseg-backend
     privileged: true
     ports:
-      - "7263:8000"
+      - "8000:8000"
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
@@ -17,8 +17,7 @@ services:
     volumes:
       - backend-storage:/app/storage
       - /usr/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:ro
-    # Note: Removing the 'deploy' block to bypass the failing NVIDIA OCI hook
-    # Privileged mode + manual volumes handle the GPU connection here
+    # Note: Using Privileged mode + manual volumes to bypass failing hook
     restart: unless-stopped
 
   frontend:
@@ -27,7 +26,7 @@ services:
       dockerfile: Dockerfile.frontend
     container_name: medseg-frontend
     ports:
-      - "7262:80"
+      - "3000:80"
     depends_on:
       - backend
     restart: unless-stopped
