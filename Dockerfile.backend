@@ -7,10 +7,12 @@ FROM nvidia/cuda:12.1.0-devel-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
-# ---- System deps ----
-RUN apt-get update && apt-get install -y \
+# ---- System deps (with mirror fallback & retries) ----
+RUN sed -i 's/archive.ubuntu.com/mirrors.kernel.org/g' /etc/apt/sources.list && \
+    for i in 1 2 3; do apt-get update && break || sleep 5; done && \
+    for i in 1 2 3; do apt-get install -y --no-install-recommends \
     python3.10 python3-pip python3.10-venv \
-    git wget ffmpeg libgl1 libglib2.0-0 \
+    git wget ffmpeg libgl1 libglib2.0-0 && break || sleep 5; done \
     && rm -rf /var/lib/apt/lists/*
 
 RUN ln -sf /usr/bin/python3.10 /usr/bin/python && \
