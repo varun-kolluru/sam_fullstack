@@ -11,13 +11,11 @@ services:
       - GUNICORN_WORKERS=1
       - GUNICORN_THREADS=2
       - SAM2_BUILD_CUDA=0
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+    reservations:
+      devices:
+        - driver: nvidia
+          count: 1
+          capabilities: [ gpu ]
 
   frontend:
     build:

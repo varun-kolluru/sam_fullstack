@@ -29,7 +29,12 @@ class SAM2Service:
             batch_size: Number of frames to process per batch
             overlap_frames: Number of frames to use for continuity between batches
         """
-        self.device = "cuda" if torch.cuda.is_available() else "mps"
+        if torch.cuda.is_available():
+            self.device = "cuda"
+        elif torch.backends.mps.is_available():
+            self.device = "mps"
+        else:
+            self.device = "cpu"
         self.cfg = cfg
         self.ckpt = ckpt
         self.batch_size = batch_size
