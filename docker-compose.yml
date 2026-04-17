@@ -1,11 +1,8 @@
-# =============================================================================
-# MedSeg Vision — SAM Fullstack (MINIMALIST GPU BYPASS)
-# =============================================================================
 services:
   backend:
     build:
-      context: .
-      dockerfile: Dockerfile.backend
+      context: ./backend/sam2
+      dockerfile: Dockerfile
     container_name: medseg-backend
     ports:
       - "8000:8000"
@@ -20,11 +17,11 @@ services:
 
   frontend:
     build:
-      context: .
-      dockerfile: Dockerfile.frontend
+      context: ./frontend
+      dockerfile: Dockerfile
     container_name: medseg-frontend
     ports:
-      - "3000:80"
+      - "3000:3000"
     depends_on:
       - backend
     restart: unless-stopped

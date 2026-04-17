@@ -1,14 +1,29 @@
-# Build stage
-FROM node:20-alpine AS build
+# ---- Stage 1: Build ----
+FROM node:18-alpine AS builder
+
 WORKDIR /app
-COPY package*.json ./
+
+# Copy package files first
+COPY package.json package-lock.json ./
+
+# Install dependencies
 RUN npm install
+
+# Copy source code
 COPY . .
+
+# Build the application
 RUN npm run build
 
-# Production stage
-FROM nginx:stable-alpine
-COPY --from=build /app/dist /usr/share/nginx/html
-# COPY nginx.conf /etc/nginx/conf.d/default.conf
-EXPOSE 80
+# ---- Stage 2: Serve ----
+FROM nginx:alpine
+
+# Copy custom nginx config
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+# Copy build artifacts from builder stage (Vite uses 'dist')
+COPY --from=builder /app/dist /usr/share/nginx/html
+
+EXPOSE 3000
+
 CMD ["nginx", "-g", "daemon off;"]
