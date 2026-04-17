@@ -8,12 +8,10 @@ ENV PYTHONUNBUFFERED=1 \
     DEBIAN_FRONTEND=noninteractive
 
 # ---- System dependencies ----
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        ffmpeg \
-        libgl1 \
-        libglib2.0-0 \
-        git \
-        wget \
+RUN sed -i 's/archive.ubuntu.com/mirrors.kernel.org/g' /etc/apt/sources.list && \
+    for i in 1 2 3; do apt-get update && break || sleep 5; done && \
+    for i in 1 2 3; do apt-get install -y --no-install-recommends \
+    ffmpeg libgl1 libglib2.0-0 git wget && break || sleep 5; done \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
