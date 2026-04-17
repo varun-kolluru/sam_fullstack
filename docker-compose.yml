@@ -17,7 +17,6 @@ services:
     volumes:
       - backend-storage:/app/storage
       - /usr/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:ro
-      - /usr/bin/nvidia-smi:/usr/bin/nvidia-smi:ro
     # Note: Removing the 'deploy' block to bypass the failing NVIDIA OCI hook
     # Privileged mode + manual volumes handle the GPU connection here
     restart: unless-stopped
