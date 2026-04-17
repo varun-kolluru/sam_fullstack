@@ -27,7 +27,7 @@ services:
       dockerfile: Dockerfile.frontend
     container_name: medseg-frontend
     ports:
-      - "80:80"
+      - "7262:80"
     depends_on:
       - backend
     restart: unless-stopped
