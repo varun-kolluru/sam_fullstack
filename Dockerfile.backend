@@ -1,0 +1,51 @@
+# ============================================
+# MedSeg Vision — Backend (SAM2 + FastAPI)
+# Restored "Oldest" Configuration (Commit 9011b9c)
+# ============================================
+FROM nvidia/cuda:12.1.0-devel-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+
+# ---- System deps ----
+RUN apt-get update && apt-get install -y \
+    python3.10 python3-pip python3.10-venv \
+    git wget ffmpeg libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN ln -sf /usr/bin/python3.10 /usr/bin/python && \
+    ln -sf /usr/bin/python3.10 /usr/bin/python3
+
+WORKDIR /app
+
+# ---- PyTorch (CUDA 12.1) ----
+RUN pip install --no-cache-dir \
+    torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
+    --index-url https://download.pytorch.org/whl/cu121
+
+# ---- Clone & install SAM2 ----
+RUN git clone https://github.com/facebookresearch/sam2.git /app/sam2 && \
+    cd /app/sam2 && pip install --no-cache-dir -e .
+
+# ---- Download SAM2 checkpoint ----
+RUN mkdir -p /app/checkpoints && \
+    wget -q -O /app/checkpoints/sam2.1_hiera_tiny.pt \
+    https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_tiny.pt
+
+# ---- Python deps ----
+# Note: Pulling from updated backend/sam2 directory
+COPY backend/sam2/requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir \
+    fastapi uvicorn python-multipart opencv-python-headless \
+    pillow scikit-image scipy numpy
+
+# ---- App code ----
+COPY backend/sam2/main.py /app/main.py
+COPY backend/sam2/sam2_service.py /app/sam2_service.py
+
+# ---- Storage dir ----
+RUN mkdir -p /app/storage/videos /app/storage/frames /app/storage/masks /app/storage/vidmasks /app/storage/tmp_batches
+
+EXPOSE 8000
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
