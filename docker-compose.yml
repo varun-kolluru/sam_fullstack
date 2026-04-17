@@ -1,5 +1,5 @@
 # =============================================================================
-# MedSeg Vision — SAM Fullstack (CLEAN RESTORATION)
+# MedSeg Vision — SAM Fullstack (MINIMALIST GPU BYPASS)
 # =============================================================================
 services:
   backend:
@@ -11,15 +11,11 @@ services:
       - "8000:8000"
     volumes:
       - backend-storage:/app/storage
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=all
     deploy:
       resources:
         reservations:
           devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+            - capabilities: [gpu]
     restart: unless-stopped
 
   frontend:
