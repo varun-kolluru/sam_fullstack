@@ -10,12 +10,16 @@ services:
     environment:
       - GUNICORN_WORKERS=1
       - GUNICORN_THREADS=2
-      - SAM2_BUILD_CUDA=0
-    reservations:
-      devices:
-        - driver: nvidia
-          count: 1
-          capabilities: [ gpu ]
+      - SAM2_BUILD_CUDA=1
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
   frontend:
     build:
