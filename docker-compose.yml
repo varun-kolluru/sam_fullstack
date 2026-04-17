@@ -9,7 +9,7 @@ services:
     container_name: medseg-backend
     privileged: true
     ports:
-      - "8000:8000"
+      - "7263:8000"
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
