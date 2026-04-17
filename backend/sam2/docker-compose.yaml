@@ -1,9 +1,9 @@
 services:
   backend:
+    image: sam2/backend
     build:
       context: .
       dockerfile: backend.Dockerfile
-    runtime: nvidia
     ports:
       - "7263:5000"
     volumes:
@@ -11,8 +11,7 @@ services:
     environment:
       - GUNICORN_WORKERS=1
       - GUNICORN_THREADS=2
-      - SAM2_BUILD_CUDA=1
-      - NVIDIA_VISIBLE_DEVICES=all
+      - SAM2_BUILD_CUDA=0
     deploy:
       resources:
         reservations:
@@ -22,6 +21,7 @@ services:
               capabilities: [gpu]
 
   frontend:
+    image: sam2/frontend
     build:
       context: ../../frontend
       dockerfile: Dockerfile

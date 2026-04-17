@@ -3,11 +3,6 @@ ARG MODEL_SIZE=base_plus
 
 FROM ${BASE_IMAGE}
 
-# Gunicorn environment variables
-ENV GUNICORN_WORKERS=1
-ENV GUNICORN_THREADS=2
-ENV GUNICORN_PORT=5000
-
 # SAM 2 environment variables
 ENV APP_ROOT=/opt/sam2
 ENV PYTHONUNBUFFERED=1
@@ -23,8 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libswscale-dev \
     pkg-config \
     build-essential \
-    libffi-dev \
-    libgl1
+    libffi-dev
 
 COPY setup.py .
 COPY README.md .
