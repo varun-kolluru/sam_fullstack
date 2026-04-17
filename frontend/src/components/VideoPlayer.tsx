@@ -313,7 +313,7 @@ const VideoPlayer = ({
     if (activeTool === 'polygon' && hitTestVertex(coords.cx, coords.cy)) return;
     const vp = canvasToVideo(coords.cx, coords.cy);
     if (!vp) return;
-    
+
     if (activeTool === 'positive') {
       onAnnotationsChange({ ...annotations, positivePoints: [...annotations.positivePoints, vp] });
     } else if (activeTool === 'negative') {
@@ -473,6 +473,8 @@ const VideoPlayer = ({
         <div className="flex items-center gap-4 px-2 text-xs text-muted-foreground">
           <span>Frame: <span className="text-primary font-mono">{Math.floor(currentTime * (fps || 30))}</span></span>
           <span>Resolution: <span className="font-mono">{videoSize.w}×{videoSize.h}</span></span>
+          <span>FPS: <span className="font-mono">{Math.round(fps)}</span></span>
+
         </div>
       )}
     </div>

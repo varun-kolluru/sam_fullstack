@@ -29,7 +29,7 @@ class SAM2Service:
             batch_size: Number of frames to process per batch
             overlap_frames: Number of frames to use for continuity between batches
         """
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = "cuda" if torch.cuda.is_available() else "mps"
         self.cfg = cfg
         self.ckpt = ckpt
         self.batch_size = batch_size
@@ -374,7 +374,7 @@ class SAM2Service:
         Returns:
             Number of masks saved
         """
-        end_frame_idx = start_frame_idx + (self.batch_size*2)
+        end_frame_idx = start_frame_idx + self.batch_size*5
         if video_name not in self.video_metadata:
             raise RuntimeError(f"Video '{video_name}' not initialized")
         

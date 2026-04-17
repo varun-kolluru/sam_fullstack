@@ -1,38 +1,16 @@
 services:
-  frontend:
-    image: sam2/frontend
-    build:
-      context: ./demo/frontend
-      dockerfile: frontend.Dockerfile
-    ports:
-      - 7262:80
-
   backend:
-    image: sam2/backend
     build:
       context: .
       dockerfile: backend.Dockerfile
     ports:
-      - 7263:5000
+      - "7263:5000"
     volumes:
-      - ./demo/data/:/data/:rw
+      - ./storage:/opt/sam2/server/storage
     environment:
-      - SERVER_ENVIRONMENT=DEV
       - GUNICORN_WORKERS=1
-      # Inference API needs to have at least 2 threads to handle an incoming
-      # parallel cancel propagation request
       - GUNICORN_THREADS=2
-      - GUNICORN_PORT=5000
-      - API_URL=http://localhost:7263
-      - DEFAULT_VIDEO_PATH=gallery/05_default_juggle.mp4
-      # # ffmpeg/video encode settings
-      - FFMPEG_NUM_THREADS=1
-      - VIDEO_ENCODE_CODEC=libx264
-      - VIDEO_ENCODE_CRF=23
-      - VIDEO_ENCODE_FPS=24
-      - VIDEO_ENCODE_MAX_WIDTH=1280
-      - VIDEO_ENCODE_MAX_HEIGHT=720
-      - VIDEO_ENCODE_VERBOSE=False
+      - SAM2_BUILD_CUDA=0
     deploy:
       resources:
         reservations:
@@ -40,3 +18,14 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+
+  frontend:
+    build:
+      context: ../../frontend
+      dockerfile: Dockerfile
+      args:
+        - VITE_API_BASE=http://localhost:7263
+    ports:
+      - "80:80"
+    depends_on:
+      - backend

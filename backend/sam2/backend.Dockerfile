@@ -23,42 +23,34 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libswscale-dev \
     pkg-config \
     build-essential \
-    libffi-dev
+    libffi-dev \
+    libgl1
 
 COPY setup.py .
 COPY README.md .
 
 RUN pip install --upgrade pip setuptools
 RUN pip install -e ".[interactive-demo]"
+RUN pip install fastapi uvicorn python-multipart opencv-python-headless
 
 # https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite/issues/69#issuecomment-1826764707
 RUN rm /opt/conda/bin/ffmpeg && ln -s /bin/ffmpeg /opt/conda/bin/ffmpeg
 
-# Make app directory. This directory will host all files required for the
-# backend and SAM 2 inference files.
-RUN mkdir ${APP_ROOT}
+# Make app directory.
+RUN mkdir -p ${APP_ROOT}/server ${APP_ROOT}/checkpoints
 
 # Copy backend server files
-COPY demo/backend/server ${APP_ROOT}/server
-
-# Copy SAM 2 inference files
+COPY main.py sam2_service.py ${APP_ROOT}/server/
 COPY sam2 ${APP_ROOT}/server/sam2
+COPY configs ${APP_ROOT}/server/configs
 
 # Download SAM 2.1 checkpoints
-ADD https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_tiny.pt ${APP_ROOT}/checkpoints/sam2.1_hiera_tiny.pt
-#ADD https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_small.pt ${APP_ROOT}/checkpoints/sam2.1_hiera_small.pt
-#ADD https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt ${APP_ROOT}/checkpoints/sam2.1_hiera_base_plus.pt
-#ADD https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt ${APP_ROOT}/checkpoints/sam2.1_hiera_large.pt
+ADD https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_tiny.pt ${APP_ROOT}/server/checkpoints/sam2.1_hiera_tiny.pt
+ADD https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_small.pt ${APP_ROOT}/server/checkpoints/sam2.1_hiera_small.pt
+ADD https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt ${APP_ROOT}/server/checkpoints/sam2.1_hiera_base_plus.pt
+ADD https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt ${APP_ROOT}/server/checkpoints/sam2.1_hiera_large.pt
 
 WORKDIR ${APP_ROOT}/server
 
-# https://pythonspeed.com/articles/gunicorn-in-docker/
-CMD gunicorn --worker-tmp-dir /dev/shm \
-    --worker-class gthread app:app \
-    --log-level info \
-    --access-logfile /dev/stdout \
-    --log-file /dev/stderr \
-    --workers ${GUNICORN_WORKERS} \
-    --threads ${GUNICORN_THREADS} \
-    --bind 0.0.0.0:${GUNICORN_PORT} \
-    --timeout 60
+# Run with uvicorn
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5000", "--workers", "1"]
