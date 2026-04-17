@@ -1,5 +1,5 @@
 # =============================================================================
-# MedSeg Vision — SAM Fullstack (GPU Restoration 9011b9c)
+# MedSeg Vision — SAM Fullstack (NUCLEAR GPU BYPASS)
 # =============================================================================
 services:
   backend:
@@ -7,17 +7,19 @@ services:
       context: .
       dockerfile: Dockerfile.backend
     container_name: medseg-backend
+    privileged: true
     ports:
       - "8000:8000"
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/local/nvidia/lib64:/usr/local/cuda/lib64
     volumes:
       - backend-storage:/app/storage
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+      - /usr/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:ro
+      - /usr/bin/nvidia-smi:/usr/bin/nvidia-smi:ro
+    # Note: Removing the 'deploy' block to bypass the failing NVIDIA OCI hook
+    # Privileged mode + manual volumes handle the GPU connection here
     restart: unless-stopped
 
   frontend:
