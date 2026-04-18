@@ -477,8 +477,8 @@ def render_masked_video_endpoint(req: RenderMaskedVideoRequest):
     out_path = os.path.join(VIDEO_DIR, f"{video_name}_masked.mp4")
     
     # Use avc1 on Mac for native web compatibility, mp4v on Windows/Linux
-    #import sys
-    codec = "avc1" #if sys.platform == "darwin" else "mp4v"
+    import sys
+    codec = "avc1" if sys.platform == "darwin" else "mp4v"
     fourcc = cv2.VideoWriter_fourcc(*codec)
     writer = cv2.VideoWriter(out_path, fourcc, fps, (w, h))
     
