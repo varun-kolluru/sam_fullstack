@@ -89,6 +89,9 @@ def _safe_video_name(raw: str) -> str:
     return os.path.basename(raw).strip()
 
 def _video_path(name: str) -> str:
+    path_webm = os.path.join(VIDEO_DIR, f"{name}.webm")
+    if os.path.exists(path_webm):
+        return path_webm
     return os.path.join(VIDEO_DIR, f"{name}.mp4")
 
 def _frame_dir(name: str) -> str:
@@ -192,7 +195,8 @@ def stream_video(video_name: str):
     path = _video_path(video_name)
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail=f"Video '{video_name}' not found.")
-    return FileResponse(path, media_type="video/mp4")
+    media_type = "video/webm" if path.endswith(".webm") else "video/mp4"
+    return FileResponse(path, media_type=media_type)
 
 @app.get("/videos/{video_name}/info")
 def video_info(video_name: str):
@@ -428,10 +432,11 @@ def delete_video(video_name: str):
     
     sam2.clear_video(video_name)
     
-    masked_video_path = os.path.join(VIDEO_DIR, f"{video_name}_masked.mp4")
+    masked_video_path_mp4 = os.path.join(VIDEO_DIR, f"{video_name}_masked.mp4")
+    masked_video_path_webm = os.path.join(VIDEO_DIR, f"{video_name}_masked.webm")
     batch_dir = os.path.join(BATCH_DIR, video_name)
     
-    for path in (_video_path(video_name), _frame_dir(video_name), _mask_dir(video_name), masked_video_path, batch_dir):
+    for path in (_video_path(video_name), _frame_dir(video_name), _mask_dir(video_name), masked_video_path_mp4, masked_video_path_webm, batch_dir):
         if os.path.isfile(path):
             os.remove(path)
         elif os.path.isdir(path):
@@ -474,11 +479,10 @@ def render_masked_video_endpoint(req: RenderMaskedVideoRequest):
     first_frame = cv2.imread(os.path.join(fdir, frame_files[0]))
     h, w = first_frame.shape[:2]
     
-    out_path = os.path.join(VIDEO_DIR, f"{video_name}_masked.mp4")
+    out_path = os.path.join(VIDEO_DIR, f"{video_name}_masked.webm")
     
-    # Use avc1 on Mac for native web compatibility, mp4v on Windows/Linux
-    import sys
-    codec = "avc1" if sys.platform == "darwin" else "mp4v"
+    # Use VP9 for WebM, guaranteeing universal cross-browser compatibility and avoiding hardware H.264 encoder issues
+    codec = "vp09"
     fourcc = cv2.VideoWriter_fourcc(*codec)
     writer = cv2.VideoWriter(out_path, fourcc, fps, (w, h))
     
