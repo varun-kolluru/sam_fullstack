@@ -1,0 +1,18 @@
+[Unit]
+Description=SAM-2 Frontend Service (Vite)
+After=network.target sam-backend.service
+
+[Service]
+User=naitik
+Group=naitik
+WorkingDirectory=/home/naitik/sam_fullstack/frontend
+# Ensure Node 20 is in the path for this service
+Environment="PATH=/home/naitik/.nvm/versions/node/v20.20.2/bin:/usr/local/bin:/usr/bin:/bin"
+# IMPORTANT: Replace <YOUR_SERVER_IP> with your server's actual IP
+Environment="VITE_API_BASE=http://<YOUR_SERVER_IP>:8000"
+ExecStart=/home/naitik/.nvm/versions/node/v20.20.2/bin/npm run dev -- --host
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
