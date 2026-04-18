@@ -279,7 +279,6 @@ class SAM2Service:
                     inference_state=state, 
                     frame_idx=batch_frame_idx, 
                     obj_id=obj_id,
-                    clear_old_points=False,  # Don't clear if we added a mask first
                 )
                 if all_points:
                     kwargs["points"] = np.array(all_points, dtype=np.float32)
@@ -342,8 +341,7 @@ class SAM2Service:
                 kwargs = dict(
                     inference_state=state, 
                     frame_idx=batch_frame_idx, 
-                    obj_id=obj_id,
-                    clear_old_points=False,
+                    obj_id=obj_id
                 )
                 if all_points:
                     kwargs["points"] = np.array(all_points, dtype=np.float32)
