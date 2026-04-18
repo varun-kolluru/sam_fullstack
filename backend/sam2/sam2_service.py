@@ -9,7 +9,7 @@ from typing import Optional, Dict, List, Tuple
 
 def _sanitize_label(label: str) -> str:
     """Sanitize label for use in filename."""
-    safe = "".join(c if c.isalnum() or c in ('-', '_') else '_' for c in label)
+    safe = "".join(c if c.isalnum() or c == '-' else '-' for c in label)
     return safe[:50] if safe else "object"
 
 
@@ -18,7 +18,7 @@ class SAM2Service:
         self,
         cfg: str = "configs/sam2.1/sam2.1_hiera_t.yaml",
         ckpt: str = "checkpoints/sam2.1_hiera_tiny.pt",
-        batch_size: int = 120
+        batch_size: int = 10
     ):
         """
         Initialize SAM2 Service for long video processing.
@@ -360,6 +360,7 @@ class SAM2Service:
         start_frame_idx: int = 0,
         end_frame_idx: Optional[int] = None,
         obj_labels: Optional[Dict[str, str]] = None,
+        progress_callback: Optional[callable] = None,
     ) -> int:
         """
         Propagate all tracked objects through the entire video using batch processing.
@@ -379,7 +380,6 @@ class SAM2Service:
         Returns:
             Number of masks saved
         """
-        end_frame_idx = start_frame_idx + self.batch_size*5
         if video_name not in self.video_metadata:
             raise RuntimeError(f"Video '{video_name}' not initialized")
         
@@ -394,6 +394,9 @@ class SAM2Service:
         total_frames = metadata["total_frames"]
         total_batches = metadata["total_batches"]
         end_frame_idx = end_frame_idx or total_frames
+        
+        total_frames_to_process = max(1, end_frame_idx - start_frame_idx)
+        processed_frames_so_far = 0
         
         # Determine which batches we need to process
         start_batch = self._get_batch_number(start_frame_idx)
@@ -467,6 +470,10 @@ class SAM2Service:
                     # Skip frames outside requested range
                     if global_frame_idx < start_frame_idx or global_frame_idx >= end_frame_idx:
                         continue
+                        
+                    processed_frames_so_far += 1
+                    if progress_callback:
+                        progress_callback(min(100.0, (processed_frames_so_far / total_frames_to_process) * 100.0))
                     
                     # Process each object in this frame
                     for i, out_obj_id in enumerate(out_obj_ids):
@@ -474,7 +481,7 @@ class SAM2Service:
                         mask_uint8 = self._logits_to_uint8(out_mask_logits[i])
                         
                         # Save mask
-                        label = obj_labels.get(str(out_obj_id), f"Object_{out_obj_id}")
+                        label = obj_labels.get(str(out_obj_id), f"Object{out_obj_id}")
                         safe_label = _sanitize_label(label)
                         path = os.path.join(
                             out_dir, 

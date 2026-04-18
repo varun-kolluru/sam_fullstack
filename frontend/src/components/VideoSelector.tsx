@@ -1,9 +1,9 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { Film, Upload, RefreshCw, Play } from 'lucide-react';
+import { Film, Upload, RefreshCw, Play, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Progress } from '@/components/ui/progress';
-import { listVideos } from '@/lib/api';
+import { listVideos, deleteVideo } from '@/lib/api';
 import {
   Select,
   SelectContent,
@@ -11,6 +11,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 
 interface VideoSelectorProps {
   onSelectExisting: (videoName: string, fps?: number) => void;
@@ -29,6 +39,8 @@ const VideoSelector = ({
   const [uploadName, setUploadName] = useState('');
   const [selectedFps, setSelectedFps] = useState<string>('native');
   const [isDragging, setIsDragging] = useState(false);
+  const [isDeleting, setIsDeleting] = useState<string | null>(null);
+  const [videoToConfirmDelete, setVideoToConfirmDelete] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   
   const currentFps = selectedFps === 'native' ? undefined : Number(selectedFps);
@@ -47,6 +59,19 @@ const VideoSelector = ({
   }, []);
 
   useEffect(() => { fetchVideos(); }, [fetchVideos]);
+
+  const handleDelete = async (name: string) => {
+    try {
+      setIsDeleting(name);
+      await deleteVideo(name);
+      await fetchVideos();
+    } catch (e) {
+      console.error(e);
+      alert(`Could not delete video ${name}`);
+    } finally {
+      setIsDeleting(null);
+    }
+  };
 
   const handleFile = useCallback((file: File) => {
     if (file.type.startsWith('video/')) {
@@ -186,22 +211,72 @@ const VideoSelector = ({
         {!loading && !error && videos.length > 0 && (
           <div className="grid gap-2 max-h-64 overflow-y-auto pr-1">
             {videos.map((name) => (
-              <button
+              <div
                 key={name}
-                disabled={isSelecting}
-                onClick={() => onSelectExisting(name, currentFps)}
-                className="flex items-center justify-between gap-3 px-4 py-3 rounded-lg border border-border bg-background hover:border-primary/50 hover:bg-primary/5 transition-all text-left group disabled:opacity-50"
+                className={`flex items-center justify-between gap-3 px-4 py-2.5 rounded-lg border border-border bg-background hover:border-primary/50 hover:bg-primary/5 transition-all group ${isDeleting === name ? 'opacity-50 pointer-events-none' : ''}`}
               >
-                <div className="flex items-center gap-3 min-w-0">
+                <div 
+                  className="flex items-center gap-3 min-w-0 flex-1 cursor-pointer" 
+                  onClick={() => !isSelecting && onSelectExisting(name, currentFps)}
+                >
                   <Film className="h-4 w-4 text-muted-foreground shrink-0" />
                   <span className="text-sm text-foreground font-mono truncate">{name}</span>
                 </div>
-                <Play className="h-3.5 w-3.5 text-muted-foreground group-hover:text-primary transition-colors shrink-0" />
-              </button>
+                <div className="flex items-center gap-1 shrink-0 opacity-50 group-hover:opacity-100 transition-opacity">
+                  <Button
+                    variant="ghost" size="icon"
+                    onClick={(e) => { e.stopPropagation(); setVideoToConfirmDelete(name); }}
+                    disabled={isSelecting || isDeleting === name}
+                    className="h-8 w-8 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                    title="Delete video"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    variant="ghost" size="icon"
+                    onClick={(e) => { e.stopPropagation(); onSelectExisting(name, currentFps); }}
+                    disabled={isSelecting}
+                    className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10"
+                    title="Select video"
+                  >
+                    <Play className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
             ))}
           </div>
         )}
       </div>
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={videoToConfirmDelete !== null} onOpenChange={(open) => !open && setVideoToConfirmDelete(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This action cannot be undone. This will permanently delete the video 
+              <span className="font-mono text-foreground mx-1">"{videoToConfirmDelete}"</span> 
+              and all of its associated frames and generated masks.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting !== null}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                if (videoToConfirmDelete) {
+                  handleDelete(videoToConfirmDelete);
+                  setVideoToConfirmDelete(null);
+                }
+              }}
+              disabled={isDeleting !== null}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {isDeleting === videoToConfirmDelete ? 'Deleting...' : 'Delete Video'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

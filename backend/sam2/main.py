@@ -20,6 +20,9 @@ from PIL import Image
 from pydantic import BaseModel, Field
 from sam2_service import SAM2Service
 
+# Global dictionary for progress tracking
+progress_store = {}
+
 # ── App setup ──────────────────────────────────────────────────────────────
 app = FastAPI(title="SAM-2 Video Segmentation API")
 
@@ -55,7 +58,7 @@ def _obj_color_bgr(obj_id: int, palette: dict[int, tuple[int, int, int]] | None 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 def _sanitize_label(label: str) -> str:
-    safe = "".join(c if c.isalnum() or c in ('-', '_') else '_' for c in label)
+    safe = "".join(c if c.isalnum() or c == '-' else '-' for c in label)
     return safe[:50] if safe else "object"
 
 def _parse_mask_filename(filename: str):
@@ -65,7 +68,7 @@ def _parse_mask_filename(filename: str):
     parts = filename[:-4].split('_', 2)
     if len(parts) >= 2:
         try:
-            return int(parts[0]), int(parts[1]), parts[2] if len(parts) > 2 else f"Object {parts[1]}"
+            return int(parts[0]), int(parts[1]), parts[2] if len(parts) > 2 else f"Object{parts[1]}"
         except ValueError:
             pass
     return None
@@ -94,10 +97,14 @@ def _frame_dir(name: str) -> str:
 def _mask_dir(name: str) -> str:
     return os.path.join(MASK_DIR, name)
 
-def _extract_frames(video_path: str, out_dir: str, target_fps: float = None):
+def _extract_frames(video_name: str, video_path: str, out_dir: str, target_fps: float = None):
+    # Initialize progress store
+    progress_store[video_name] = {"extraction": 0.0, "tracking": 0.0}
+
     os.makedirs(out_dir, exist_ok=True)
     cap = cv2.VideoCapture(video_path)
     native_fps = cap.get(cv2.CAP_PROP_FPS)
+    total_frames_approx = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     if native_fps <= 0:
         native_fps = 30.0 # fallback
         
@@ -118,6 +125,8 @@ def _extract_frames(video_path: str, out_dir: str, target_fps: float = None):
         if idx == target_idx:
             cv2.imwrite(os.path.join(out_dir, f"{saved_count:05d}.jpg"), frame)
             saved_count += 1
+            if total_frames_approx > 0:
+                progress_store[video_name]["extraction"] = min(100.0, (idx / total_frames_approx) * 100.0)
         idx += 1
         
     cap.release()
@@ -216,7 +225,7 @@ async def upload_video_endpoint(video: UploadFile = File(...), name: str = Query
     
     fdir = _frame_dir(video_name)
     try:
-        total_frames, extracted_fps = _extract_frames(vpath, fdir, target_fps=fps)
+        total_frames, extracted_fps = _extract_frames(video_name, vpath, fdir, target_fps=fps)
     except Exception:
         os.remove(vpath)
         raise HTTPException(status_code=422, detail="Could not extract frames.")
@@ -245,7 +254,7 @@ def select_video_endpoint(body: SelectVideoRequest):
         if os.path.exists(mdir):
             shutil.rmtree(mdir)
         
-        total_frames, extracted_fps = _extract_frames(vpath, fdir, target_fps=body.fps)
+        total_frames, extracted_fps = _extract_frames(video_name, vpath, fdir, target_fps=body.fps)
     else:
         _require_frames(video_name)
         fd = _frame_dir(video_name)
@@ -310,6 +319,14 @@ def propagate_endpoint(req: PropagateRequest):
     
     obj_labels = _get_object_labels_from_masks(video_name)
     print(obj_labels)
+    
+    # Init progress store if missing
+    if video_name not in progress_store:
+        progress_store[video_name] = {"extraction": 100.0, "tracking": 0.0}
+
+    def tracking_progress_cb(progress: float):
+        progress_store[video_name]["tracking"] = progress
+
     try:
         total = sam2.propagate_and_save(
             video_name=video_name,
@@ -317,7 +334,9 @@ def propagate_endpoint(req: PropagateRequest):
             start_frame_idx=req.start_frame_idx,
             end_frame_idx=req.end_frame_idx,
             obj_labels=obj_labels,
+            progress_callback=tracking_progress_cb,
         )
+        progress_store[video_name]["tracking"] = 100.0
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     
@@ -327,6 +346,11 @@ def propagate_endpoint(req: PropagateRequest):
         "end_frame_idx": req.end_frame_idx,
         "total_masks_saved": total,
     }
+
+@app.get("/progress/{video_name}")
+def get_progress(video_name: str):
+    video_name = _safe_video_name(video_name)
+    return progress_store.get(video_name, {"extraction": 0.0, "tracking": 0.0})
 
 # ── Frame/mask convenience endpoints ───────────────────────────────────────
 @app.get("/videos/{video_name}/frames/{frame_idx}")
@@ -404,7 +428,10 @@ def delete_video(video_name: str):
     
     sam2.clear_video(video_name)
     
-    for path in (_video_path(video_name), _frame_dir(video_name), _mask_dir(video_name)):
+    masked_video_path = os.path.join(VIDEO_DIR, f"{video_name}_masked.mp4")
+    batch_dir = os.path.join(BATCH_DIR, video_name)
+    
+    for path in (_video_path(video_name), _frame_dir(video_name), _mask_dir(video_name), masked_video_path, batch_dir):
         if os.path.isfile(path):
             os.remove(path)
         elif os.path.isdir(path):
@@ -449,8 +476,10 @@ def render_masked_video_endpoint(req: RenderMaskedVideoRequest):
     
     out_path = os.path.join(VIDEO_DIR, f"{video_name}_masked.mp4")
     
-    # Use mp4v codec (software-based, widely available)
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    # Use avc1 on Mac for native web compatibility, mp4v on Windows/Linux
+    import sys
+    codec = "avc1" if sys.platform == "darwin" else "mp4v"
+    fourcc = cv2.VideoWriter_fourcc(*codec)
     writer = cv2.VideoWriter(out_path, fourcc, fps, (w, h))
     
     # Verify writer opened successfully

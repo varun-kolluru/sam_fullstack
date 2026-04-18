@@ -10,7 +10,7 @@ import AnnotationToolbar from '@/components/AnnotationToolbar';
 import ObjectManager, { type TrackedObject } from '@/components/ObjectManager';
 import {
   uploadVideo, selectVideo, segmentFrame, propagate,
-  renderMaskedVideo, getVideoStreamUrl, getObjectLabels, getMaskPolygons, API_BASE,
+  renderMaskedVideo, getVideoStreamUrl, getObjectLabels, getMaskPolygons, getProgress, API_BASE,
 } from '@/lib/api';
 
 type Tool = 'none' | 'positive' | 'negative' | 'box' | 'polygon';
@@ -77,7 +77,7 @@ const Workspace = () => {
 
   // Multi-object state
   const [objects, setObjects] = useState<TrackedObject[]>([
-    { id: 1, label: 'Object 1', color: OBJECT_PALETTE[0] },
+    { id: 1, label: 'Object1', color: OBJECT_PALETTE[0] },
   ]);
   const [activeObjectId, setActiveObjectId] = useState(1);
   const [annotationsMap, setAnnotationsMap] = useState<Record<number, Annotations>>({ 1: emptyAnnotations });
@@ -192,8 +192,18 @@ const Workspace = () => {
   const handleUploadNew = useCallback(async (file: File, name: string, selectedFps?: number) => {
     setStatus('uploading');
     setUploadProgress(0);
+    
+    const pollInterval = window.setInterval(async () => {
+      try {
+        const prog = await getProgress(name);
+        if (prog && prog.extraction > 0) {
+          setUploadProgress(50 + (prog.extraction / 2));
+        }
+      } catch (e) { /* ignore */ }
+    }, 1000);
+
     try {
-      const result = await uploadVideo(file, name, selectedFps, (p) => setUploadProgress(p));
+      const result = await uploadVideo(file, name, selectedFps, (p) => setUploadProgress(p / 2));
       setVideoName(result.video_name);
       setFps(result.fps || 30);
       setAndRememberVideoUrl(getVideoStreamUrl(result.video_name));
@@ -202,6 +212,8 @@ const Workspace = () => {
     } catch (err: any) {
       toast({ title: 'Upload Failed', description: err.message || 'Upload failed.', variant: 'destructive' });
       setStatus('idle');
+    } finally {
+      window.clearInterval(pollInterval);
     }
   }, [toast]);
 
@@ -265,6 +277,11 @@ const Workspace = () => {
         }));
       }
       setSegmentedObjects(prev => new Set(prev).add(activeObjectId));
+      
+      // Clear prompts after successful segmentation
+      setAnnotations(emptyAnnotations);
+      setClearSignal(prev => prev + 1);
+
       setStatus('segmented');
       toast({
         title: 'Segmentation Complete',
@@ -286,12 +303,16 @@ const Workspace = () => {
   const handleTrack = useCallback(async () => {
     setStatus('tracking');
     setTrackingProgress(0);
+    
+    const progressInterval = setInterval(async () => {
+      try {
+        const prog = await getProgress(videoName);
+        if (prog) setTrackingProgress(prog.tracking);
+      } catch (e) { /* ignore */ }
+    }, 500);
+
     try {
-      const progressInterval = setInterval(() => {
-        setTrackingProgress(prev => Math.min(prev + Math.random() * 8, 90));
-      }, 600);
-      const result = await propagate(videoName, frameIdx, frameIdx + 50);
-      clearInterval(progressInterval);
+      const result = await propagate(videoName, frameIdx);
       setTrackingProgress(100);
       setStatus('tracked');
       setMaskedVideoUrl(null);
@@ -300,6 +321,8 @@ const Workspace = () => {
     } catch {
       toast({ title: 'Tracking Failed', description: 'Propagation failed.', variant: 'destructive' });
       setStatus('segmented');
+    } finally {
+      clearInterval(progressInterval);
     }
   }, [videoName, frameIdx, segmentedObjects.size, toast]);
 

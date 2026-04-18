@@ -34,7 +34,7 @@ const ObjectManager = ({
   useEffect(() => { if (editingId !== null) editInputRef.current?.focus(); }, [editingId]);
 
   const commitAdd = () => {
-    onAdd(newLabel.trim() || `Object ${objects.length + 1}`);
+    onAdd(newLabel.trim() || `Object${objects.length + 1}`);
     setNewLabel('');
     setAdding(false);
   };
@@ -75,7 +75,7 @@ const ObjectManager = ({
               <Input
                 ref={editInputRef}
                 value={editLabel}
-                onChange={e => setEditLabel(e.target.value)}
+                onChange={e => setEditLabel(e.target.value.replace(/_/g, '-'))}
                 onKeyDown={e => {
                   if (e.key === 'Enter') { e.preventDefault(); commitRename(); }
                   if (e.key === 'Escape') setEditingId(null);
@@ -133,8 +133,8 @@ const ObjectManager = ({
           <Input
             ref={addInputRef}
             value={newLabel}
-            placeholder={`Object ${objects.length + 1}`}
-            onChange={e => setNewLabel(e.target.value)}
+            placeholder={`Object${objects.length + 1}`}
+            onChange={e => setNewLabel(e.target.value.replace(/_/g, '-'))}
             onKeyDown={e => {
               if (e.key === 'Enter') { e.preventDefault(); commitAdd(); }
               if (e.key === 'Escape') { setAdding(false); setNewLabel(''); }

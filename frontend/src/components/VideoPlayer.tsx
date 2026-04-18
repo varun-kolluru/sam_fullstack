@@ -67,11 +67,25 @@ const VideoPlayer = ({
 
   useEffect(() => {
     if ((annotations as any).__undoPolygonPoint) {
-      setCurrentPolygon(prev => prev.length > 0 ? prev.slice(0, -1) : prev);
       const { __undoPolygonPoint, ...clean } = annotations as any;
-      onAnnotationsChange(clean as Annotations);
+      if (currentPolygon.length > 0) {
+        setCurrentPolygon(prev => prev.slice(0, -1));
+        onAnnotationsChange(clean as Annotations);
+      } else {
+        if (clean.polygons.length > 0) {
+          const polys = [...clean.polygons];
+          const last = [...polys[polys.length - 1]];
+          if (last.length > 1) {
+            polys[polys.length - 1] = last.slice(0, -1);
+          } else {
+            polys.pop();
+          }
+          clean.polygons = polys;
+        }
+        onAnnotationsChange(clean as Annotations);
+      }
     }
-  }, [annotations, onAnnotationsChange]);
+  }, [annotations, currentPolygon.length, onAnnotationsChange]);
 
   useEffect(() => {
     if (!maskUrl) { setMaskImage(null); return; }

@@ -57,15 +57,8 @@ const AnnotationToolbar = ({
       onAnnotationsChange({ ...annotations, negativePoints: annotations.negativePoints.slice(0, -1) });
     } else if (activeTool === 'box' && annotations.boxes.length > 0) {
       onAnnotationsChange({ ...annotations, boxes: annotations.boxes.slice(0, -1) });
-    } else if (activeTool === 'polygon' && annotations.polygons.length > 0) {
-      const polys = [...annotations.polygons];
-      const last = [...polys[polys.length - 1]];
-      if (last.length > 1) {
-        polys[polys.length - 1] = last.slice(0, -1);
-      } else {
-        polys.pop();
-      }
-      onAnnotationsChange({ ...annotations, polygons: polys, __undoPolygonPoint: true } as any);
+    } else if (activeTool === 'polygon') {
+      onAnnotationsChange({ ...annotations, __undoPolygonPoint: true } as any);
     }
   };
 

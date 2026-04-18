@@ -12,6 +12,10 @@ async function handleResponse<T>(res: Response): Promise<T> {
   return res.json();
 }
 
+export async function getProgress(videoName: string): Promise<{ extraction: number; tracking: number }> {
+  return handleResponse(await fetch(`${API_BASE}/progress/${encodeURIComponent(videoName)}`));
+}
+
 // ── Video management ────────────────────────────────────────────────────────
 export function getVideoStreamUrl(videoName: string): string {
   return `${API_BASE}/videos/${encodeURIComponent(videoName)}/stream`;
@@ -26,6 +30,12 @@ export async function selectVideo(videoName: string, fps?: number) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ video_name: videoName, fps }),
+  }));
+}
+
+export async function deleteVideo(videoName: string) {
+  return handleResponse(await fetch(`${API_BASE}/videos/${encodeURIComponent(videoName)}`, {
+    method: 'DELETE',
   }));
 }
 
