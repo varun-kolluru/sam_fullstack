@@ -481,8 +481,8 @@ def render_masked_video_endpoint(req: RenderMaskedVideoRequest):
     
     out_path = os.path.join(VIDEO_DIR, f"{video_name}_masked.webm")
     
-    # Use VP9 for WebM, guaranteeing universal cross-browser compatibility and avoiding hardware H.264 encoder issues
-    codec = "vp09"
+    # Use VP8 for WebM, guaranteeing universal cross-browser compatibility and avoiding hardware H.264 encoder issues
+    codec = "vp80"
     fourcc = cv2.VideoWriter_fourcc(*codec)
     writer = cv2.VideoWriter(out_path, fourcc, fps, (w, h))
     
